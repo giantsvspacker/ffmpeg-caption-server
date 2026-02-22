@@ -53,13 +53,19 @@ app.post('/burn-captions', async (req, res) => {
   const { videoUrl, srt, videoName } = req.body;
   if (!videoUrl || !srt || !videoName)
     return res.status(400).json({ error: 'videoUrl, srt, videoName required' });
+
+  // Support .mp4 and .mov (and other formats) — always output as .mp4
+  const inputExtMatch = videoName.match(/\.(mov|mp4|avi|mkv|webm|m4v)$/i);
+  const inputExt = inputExtMatch ? inputExtMatch[0].toLowerCase() : '.mp4';
+  const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
+
   const ts  = Date.now();
-  const inp = `/tmp/in_${ts}.mp4`;
+  const inp = `/tmp/in_${ts}${inputExt}`;
   const sub = `/tmp/sub_${ts}.srt`;
   const out = `/tmp/out_${ts}.mp4`;
   const cleanup = () => [inp,sub,out].forEach(f => { try { fs.unlinkSync(f); } catch(e){} });
   try {
-    console.log(`▶ [${videoName}] Downloading...`);
+    console.log(`▶ [${videoName}] Downloading... (format: ${inputExt})`);
     await downloadFile(videoUrl, inp);
     fs.writeFileSync(sub, srt, 'utf8');
     const style = [
@@ -73,10 +79,10 @@ app.post('/burn-captions', async (req, res) => {
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
-    const key = `captioned/${videoName}_captioned.mp4`;
+    const key = `captioned/${baseName}_captioned.mp4`;
     const downloadUrl = await uploadToR2(out, key);
     cleanup();
-    console.log(`✅ [${videoName}] Done!`);
+    console.log(`✅ [${videoName}] Done! → ${downloadUrl}`);
     res.json({ success: true, videoUrl: downloadUrl, videoName });
   } catch (err) {
     cleanup();
