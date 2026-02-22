@@ -1,8 +1,10 @@
+# Font fix for Railway deployment
 FROM node:20-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig \
-    fonts-liberation \
+    fonts-dejavu-core \
+    && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
