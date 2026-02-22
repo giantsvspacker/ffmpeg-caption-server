@@ -1,3 +1,4 @@
+const ffmpegPath = require('ffmpeg-static');
 const express = require('express');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -94,7 +95,7 @@ app.post('/burn-captions', async (req, res) => {
     ].join(',');
 
     const safeSub = sub.replace(/:/g, '\\:');
-    const cmd = `ffmpeg -y -i "${inp}" -vf "subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset medium -crf 18 -profile:v high -level 4.1 -c:a aac -b:a 192k -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset medium -crf 18 -profile:v high -level 4.1 -c:a aac -b:a 192k -movflags +faststart "${out}"`;
 
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
