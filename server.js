@@ -5,7 +5,7 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const { promisify } = require('util');
-const { S3Client, PutObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const execAsync = promisify(exec);
 
 const app = express();
@@ -91,8 +91,8 @@ app.post('/burn-captions', async (req, res) => {
   }
 });
 
-// List all videos from R2 bucket (excludes captioned/ folder)
-// Used by n8n Queue Builder to auto-discover uploaded videos
+// List all source videos from R2 (excludes captioned/ folder)
+// Used by Queue Builder to auto-discover uploaded videos
 app.get('/list-videos', async (req, res) => {
   try {
     const files = [];
@@ -124,10 +124,30 @@ app.get('/list-videos', async (req, res) => {
     // Sort oldest-first so videos post in upload order
     files.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
 
-    console.log(`📦 list-videos: found ${files.length} video(s) in R2`);
+    console.log(`📦 list-videos: found ${files.length} video(s)`);
     res.json({ success: true, files, count: files.length });
   } catch (err) {
     console.error('❌ list-videos error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a source video from R2 after it has been posted
+// Called by Auto Caption workflow after successful posting
+// Usage: DELETE /delete-video?key=myvideo.mp4
+app.delete('/delete-video', async (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'key query parameter required (e.g. ?key=myvideo.mp4)' });
+
+  try {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+    }));
+    console.log(`🗑️ Deleted from R2: ${key}`);
+    res.json({ success: true, deleted: key });
+  } catch (err) {
+    console.error('❌ delete-video error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
