@@ -88,14 +88,14 @@ app.post('/burn-captions', async (req, res) => {
     fs.writeFileSync(sub, srt, 'utf8');
 
     const style = [
-      'FontSize=24','FontName=Arial',
+      'FontSize=24',
       'PrimaryColour=&H00FFFFFF','OutlineColour=&H00000000',
       'BackColour=&H80000000','Bold=1','Outline=2',
       'Shadow=1','Alignment=2','MarginV=30'
     ].join(',');
 
     const safeSub = sub.replace(/:/g, '\\:');
-    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset medium -crf 18 -profile:v high -level 4.1 -c:a aac -b:a 192k -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset ultrafast -crf 23 -profile:v high -level 4.1 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
 
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
