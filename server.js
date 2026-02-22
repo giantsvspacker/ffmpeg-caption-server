@@ -5,7 +5,7 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const { promisify } = require('util');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const execAsync = promisify(exec);
 
 const app = express();
@@ -87,6 +87,47 @@ app.post('/burn-captions', async (req, res) => {
   } catch (err) {
     cleanup();
     console.error(`❌ [${videoName}]`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List all videos from R2 bucket (excludes captioned/ folder)
+// Used by n8n Queue Builder to auto-discover uploaded videos
+app.get('/list-videos', async (req, res) => {
+  try {
+    const files = [];
+    let continuationToken = undefined;
+
+    do {
+      const data = await s3.send(new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET,
+        ContinuationToken: continuationToken,
+      }));
+
+      if (data.Contents) {
+        for (const obj of data.Contents) {
+          const key = obj.Key;
+          // Skip the captioned/ output folder and non-video files
+          if (!key.startsWith('captioned/') && /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(key)) {
+            files.push({
+              filename: key,
+              size: obj.Size,
+              lastModified: obj.LastModified,
+            });
+          }
+        }
+      }
+
+      continuationToken = data.IsTruncated ? data.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    // Sort oldest-first so videos post in upload order
+    files.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
+
+    console.log(`📦 list-videos: found ${files.length} video(s) in R2`);
+    res.json({ success: true, files, count: files.length });
+  } catch (err) {
+    console.error('❌ list-videos error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
