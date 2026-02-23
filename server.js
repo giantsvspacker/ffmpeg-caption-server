@@ -88,7 +88,9 @@ app.post('/burn-captions', async (req, res) => {
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
-    const key = `captioned/${baseName}_captioned.mp4`;
+    // Sanitize output filename — remove # and spaces that break Instagram/Facebook video URLs
+    const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
+    const key = `captioned/${safeBaseName}_captioned.mp4`;
     const downloadUrl = await uploadToR2(out, key);
     cleanup();
     console.log(`✅ [${videoName}] Done! → ${downloadUrl}`);
