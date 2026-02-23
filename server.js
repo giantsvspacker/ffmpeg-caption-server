@@ -46,7 +46,9 @@ async function uploadToR2(filePath, key) {
     Body: buf,
     ContentType: 'video/mp4',
   }));
-  return `${process.env.R2_PUBLIC_URL}/${key}`;
+  // Encode each path segment to handle spaces, # and special characters in filenames
+  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+  return `${process.env.R2_PUBLIC_URL}/${encodedKey}`;
 }
 
 app.post('/burn-captions', async (req, res) => {
