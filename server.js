@@ -77,7 +77,14 @@ app.post('/burn-captions', async (req, res) => {
       'Shadow=1','Alignment=2','MarginV=30'
     ].join(',');
     const safeSub = sub.replace(/'/g, "\\'");
-    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset ultrafast -crf 23 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
+    // Enhanced quality pipeline:
+    // 1. Lanczos upscale to 1080x1920 (sharper than default)
+    // 2. Unsharp mask — crisp text & edges (0.8 = subtle, not over-sharpened)
+    // 3. eq — slight brightness/contrast/saturation boost for vibrant look
+    // 4. Subtitles rendered last (on top of all enhancements)
+    // CRF 20 = higher quality than default 23 (lower = better, larger file)
+    // preset veryfast = better quality than ultrafast, still fast enough for Railway
+    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 20 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
