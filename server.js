@@ -46,7 +46,6 @@ async function uploadToR2(filePath, key) {
     Body: buf,
     ContentType: 'video/mp4',
   }));
-  // Encode each path segment to handle spaces, # and special characters in filenames
   const encodedKey = key.split('/').map(encodeURIComponent).join('/');
   return `${process.env.R2_PUBLIC_URL}/${encodedKey}`;
 }
@@ -56,7 +55,6 @@ app.post('/burn-captions', async (req, res) => {
   if (!videoUrl || !srt || !videoName)
     return res.status(400).json({ error: 'videoUrl, srt, videoName required' });
 
-  // Support .mp4 and .mov (and other formats) — always output as .mp4
   const inputExtMatch = videoName.match(/\.(mov|mp4|avi|mkv|webm|m4v)$/i);
   const inputExt = inputExtMatch ? inputExtMatch[0].toLowerCase() : '.mp4';
   const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
@@ -77,18 +75,10 @@ app.post('/burn-captions', async (req, res) => {
       'Shadow=1','Alignment=2','MarginV=50'
     ].join(',');
     const safeSub = sub.replace(/'/g, "\\'");
-    // Enhanced quality pipeline:
-    // 1. Lanczos upscale to 1080x1920 (sharper than default)
-    // 2. Unsharp mask — crisp text & edges (0.8 = subtle, not over-sharpened)
-    // 3. eq — slight brightness/contrast/saturation boost for vibrant look
-    // 4. Subtitles rendered last (on top of all enhancements)
-    // CRF 20 = higher quality than default 23 (lower = better, larger file)
-    // preset veryfast = better quality than ultrafast, still fast enough for Railway
     const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
-    // Sanitize output filename — remove # and spaces that break Instagram/Facebook video URLs
     const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
     const key = `captioned/${safeBaseName}_captioned.mp4`;
     const downloadUrl = await uploadToR2(out, key);
@@ -102,8 +92,6 @@ app.post('/burn-captions', async (req, res) => {
   }
 });
 
-// List all source videos from R2 (excludes captioned/ folder)
-// Used by Queue Builder to auto-discover uploaded videos
 app.get('/list-videos', async (req, res) => {
   try {
     const files = [];
@@ -118,7 +106,6 @@ app.get('/list-videos', async (req, res) => {
       if (data.Contents) {
         for (const obj of data.Contents) {
           const key = obj.Key;
-          // Skip the captioned/ output folder and non-video files
           if (!key.startsWith('captioned/') && /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(key)) {
             files.push({
               filename: key,
@@ -132,7 +119,6 @@ app.get('/list-videos', async (req, res) => {
       continuationToken = data.IsTruncated ? data.NextContinuationToken : undefined;
     } while (continuationToken);
 
-    // Sort oldest-first so videos post in upload order
     files.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
 
     console.log(`📦 list-videos: found ${files.length} video(s)`);
@@ -143,9 +129,6 @@ app.get('/list-videos', async (req, res) => {
   }
 });
 
-// Delete a source video from R2 after it has been posted
-// Called by Auto Caption workflow after successful posting
-// Usage: DELETE /delete-video?key=myvideo.mp4
 app.delete('/delete-video', async (req, res) => {
   const key = req.query.key;
   if (!key) return res.status(400).json({ error: 'key query parameter required (e.g. ?key=myvideo.mp4)' });
@@ -163,9 +146,6 @@ app.delete('/delete-video', async (req, res) => {
   }
 });
 
-// Convert a YouTube/Facebook video to MP3 and upload to R2
-// Usage: POST /video-to-mp3 { videoUrl, folder? }
-// Returns: { success, mp3Url, mp3Name, durationSeconds, endTime }
 app.post('/video-to-mp3', async (req, res) => {
   const { videoUrl, folder } = req.body;
   if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
@@ -183,6 +163,7 @@ app.post('/video-to-mp3', async (req, res) => {
     );
     const rawTitle  = (titleOut || '').trim();
     const safeTitle = (rawTitle || `audio_${ts}`)
+      .replace(/lofilulla/gi, 'NovaZiri')
       .replace(/[#%?&=+<>|\\/:*"]/g, '')
       .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
       || `audio_${ts}`;
@@ -200,7 +181,6 @@ app.post('/video-to-mp3', async (req, res) => {
       { timeout: 120000 }
     );
 
-    // Get duration (ffmpeg exits with error when no output is specified — duration is in stderr)
     let durationSeconds = 0, endTime = '0:00';
     try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000 }); } catch(e) {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
@@ -232,9 +212,6 @@ app.post('/video-to-mp3', async (req, res) => {
   }
 });
 
-// Download any public URL and save it to Cloudflare R2
-// Usage: POST /save-url-to-r2 { url, folder?, filename? }
-// Returns: { success, r2Url, key }
 app.post('/save-url-to-r2', async (req, res) => {
   const { url, folder, filename } = req.body;
   if (!url) return res.status(400).json({ error: 'url required' });
@@ -273,11 +250,8 @@ app.post('/save-url-to-r2', async (req, res) => {
   }
 });
 
-// Download a video URL, trim the last 1 second, and save to Cloudflare R2
-// Usage: POST /trim-and-save-to-r2 { url, folder?, filename? }
-// Returns: { success, r2Url, key, durationOriginal, durationTrimmed }
 app.post('/trim-and-save-to-r2', async (req, res) => {
-  const { url, folder, filename } = req.body;
+  const { url, folder, filename, audioDuration } = req.body;
   if (!url) return res.status(400).json({ error: 'url required' });
 
   const ts        = Date.now();
@@ -289,7 +263,6 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
     console.log(`▶ [Trim] Downloading: ${url}`);
     await downloadFile(url, tmpInput);
 
-    // Get duration — ffmpeg exits with error when no output specified; duration is in stderr
     let durationSeconds = 0;
     try { await execAsync(`${ffmpegPath} -i "${tmpInput}"`, { timeout: 15000 }); } catch(e) {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
@@ -298,8 +271,11 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
 
     if (durationSeconds < 2) throw new Error(`Video too short to trim: ${durationSeconds}s`);
 
-    const trimDuration = durationSeconds - 1;
-    console.log(`▶ [Trim] Cutting: ${durationSeconds}s → ${trimDuration}s (removing last 1 second)`);
+    const trimDuration = (audioDuration && audioDuration > 0)
+      ? Math.min(audioDuration, durationSeconds - 0.1)
+      : durationSeconds - 1;
+    console.log(`▶ [Trim] Cutting: ${durationSeconds}s → ${trimDuration}s (audioDuration: ${audioDuration || 'not provided'})`);
+
     await execAsync(
       `${ffmpegPath} -y -i "${tmpInput}" -t ${trimDuration} -c copy "${tmpOutput}"`,
       { timeout: 120000 }
@@ -326,7 +302,6 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.post('/pick-novaziri-image', async (req, res) => {
   try {
     const listResult = await s3.send(new ListObjectsV2Command({
@@ -342,7 +317,6 @@ app.post('/pick-novaziri-image', async (req, res) => {
 
     const picked = objects[Math.floor(Math.random() * objects.length)];
 
-    // Download from R2 directly (before deleting)
     const getResult = await s3.send(new GetObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: picked.Key,
@@ -354,7 +328,6 @@ app.post('/pick-novaziri-image', async (req, res) => {
     }
     const imageBuffer = Buffer.concat(chunks);
 
-    // Delete from R2
     await s3.send(new DeleteObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: picked.Key,
@@ -372,4 +345,6 @@ app.post('/pick-novaziri-image', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
