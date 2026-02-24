@@ -5,7 +5,7 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const { promisify } = require('util');
-const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const execAsync = promisify(exec);
 
 const app = express();
@@ -327,4 +327,49 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.post('/pick-novaziri-image', async (req, res) => {
+  try {
+    const listResult = await s3.send(new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET,
+      Prefix: 'NovaZiri Photo/',
+    }));
+
+    const objects = (listResult.Contents || []).filter(obj => !obj.Key.endsWith('/'));
+
+    if (objects.length === 0) {
+      return res.status(404).json({ error: 'No NovaZiri images available. Please upload more photos to the NovaZiri Photo folder.' });
+    }
+
+    const picked = objects[Math.floor(Math.random() * objects.length)];
+
+    // Download from R2 directly (before deleting)
+    const getResult = await s3.send(new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: picked.Key,
+    }));
+
+    const chunks = [];
+    for await (const chunk of getResult.Body) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const imageBuffer = Buffer.concat(chunks);
+
+    // Delete from R2
+    await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: picked.Key,
+    }));
+
+    console.log(`🖼️ [NovaZiri] Picked & deleted: ${picked.Key} | ${objects.length - 1} remaining`);
+
+    const ext = picked.Key.split('.').pop().toLowerCase();
+    const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+    res.setHeader('Content-Type', mimeTypes[ext] || 'image/png');
+    res.send(imageBuffer);
+
+  } catch (err) {
+    console.error('❌ pick-novaziri-image error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
