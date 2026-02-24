@@ -163,5 +163,168 @@ app.delete('/delete-video', async (req, res) => {
   }
 });
 
+// Convert a YouTube/Facebook video to MP3 and upload to R2
+// Usage: POST /video-to-mp3 { videoUrl, folder? }
+// Returns: { success, mp3Url, mp3Name, durationSeconds, endTime }
+app.post('/video-to-mp3', async (req, res) => {
+  const { videoUrl, folder } = req.body;
+  if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
+
+  const ts = Date.now();
+  const tmpVideo = `/tmp/vid_${ts}`;
+  const tmpMp3   = `/tmp/audio_${ts}.mp3`;
+  const cleanup  = () => [tmpVideo, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  try {
+    console.log(`▶ [MP3] Getting title: ${videoUrl}`);
+    const { stdout: titleOut } = await execAsync(
+      `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${videoUrl}"`,
+      { timeout: 30000 }
+    );
+    const rawTitle  = (titleOut || '').trim();
+    const safeTitle = (rawTitle || `audio_${ts}`)
+      .replace(/[#%?&=+<>|\\/:*"]/g, '')
+      .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
+      || `audio_${ts}`;
+
+    console.log(`▶ [MP3] Downloading audio: ${rawTitle}`);
+    await execAsync(
+      `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestaudio[ext=m4a]/bestaudio/best" ` +
+      `--no-playlist -o "${tmpVideo}" "${videoUrl}"`,
+      { timeout: 300000 }
+    );
+
+    console.log(`▶ [MP3] Converting to MP3...`);
+    await execAsync(
+      `${ffmpegPath} -y -i "${tmpVideo}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
+      { timeout: 120000 }
+    );
+
+    // Get duration (ffmpeg exits with error when no output is specified — duration is in stderr)
+    let durationSeconds = 0, endTime = '0:00';
+    try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000 }); } catch(e) {
+      const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
+      if (m) {
+        durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
+        const tm = Math.floor(durationSeconds / 60), ts2 = durationSeconds % 60;
+        endTime = `${tm}:${ts2.toString().padStart(2, '0')}`;
+      }
+    }
+
+    const mp3Name = `${safeTitle}.mp3`;
+    const key     = folder ? `${folder}/${mp3Name}` : `mp3/${mp3Name}`;
+    console.log(`▶ [MP3] Uploading to R2: ${key} | duration: ${endTime}`);
+
+    const buf = fs.readFileSync(tmpMp3);
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET, Key: key, Body: buf, ContentType: 'audio/mpeg',
+    }));
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    const mp3Url = `${process.env.R2_PUBLIC_URL}/${encodedKey}`;
+
+    cleanup();
+    console.log(`✅ [MP3] Done → ${mp3Url} (${endTime})`);
+    res.json({ success: true, mp3Url, mp3Name, durationSeconds, endTime });
+  } catch (err) {
+    cleanup();
+    console.error('❌ video-to-mp3 error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download any public URL and save it to Cloudflare R2
+// Usage: POST /save-url-to-r2 { url, folder?, filename? }
+// Returns: { success, r2Url, key }
+app.post('/save-url-to-r2', async (req, res) => {
+  const { url, folder, filename } = req.body;
+  if (!url) return res.status(400).json({ error: 'url required' });
+
+  const ts  = Date.now();
+  const ext = (url.split('?')[0].match(/\.([a-z0-9]+)$/i) || [,'mp4'])[1].toLowerCase();
+  const tmp = `/tmp/save_${ts}.${ext}`;
+  const cleanup = () => { try { fs.unlinkSync(tmp); } catch(e) {} };
+
+  try {
+    console.log(`▶ [Save] Downloading: ${url}`);
+    await downloadFile(url, tmp);
+
+    const safeName = (filename || `output_${ts}.${ext}`)
+      .replace(/[#%?&=+<>|\\/:*"]/g, '').replace(/\s+/g, '-');
+    const key = folder ? `${folder}/${safeName}` : safeName;
+
+    const mime = { mp4: 'video/mp4', mp3: 'audio/mpeg', png: 'image/png',
+                   jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+
+    const buf = fs.readFileSync(tmp);
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET, Key: key, Body: buf,
+      ContentType: mime[ext] || 'application/octet-stream',
+    }));
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    const r2Url = `${process.env.R2_PUBLIC_URL}/${encodedKey}`;
+
+    cleanup();
+    console.log(`✅ [Save] Done → ${r2Url}`);
+    res.json({ success: true, r2Url, key });
+  } catch (err) {
+    cleanup();
+    console.error('❌ save-url-to-r2 error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download a video URL, trim the last 1 second, and save to Cloudflare R2
+// Usage: POST /trim-and-save-to-r2 { url, folder?, filename? }
+// Returns: { success, r2Url, key, durationOriginal, durationTrimmed }
+app.post('/trim-and-save-to-r2', async (req, res) => {
+  const { url, folder, filename } = req.body;
+  if (!url) return res.status(400).json({ error: 'url required' });
+
+  const ts        = Date.now();
+  const tmpInput  = `/tmp/trim_in_${ts}.mp4`;
+  const tmpOutput = `/tmp/trim_out_${ts}.mp4`;
+  const cleanup   = () => [tmpInput, tmpOutput].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  try {
+    console.log(`▶ [Trim] Downloading: ${url}`);
+    await downloadFile(url, tmpInput);
+
+    // Get duration — ffmpeg exits with error when no output specified; duration is in stderr
+    let durationSeconds = 0;
+    try { await execAsync(`${ffmpegPath} -i "${tmpInput}"`, { timeout: 15000 }); } catch(e) {
+      const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if (m) durationSeconds = +m[1]*3600 + +m[2]*60 + parseFloat(m[3]);
+    }
+
+    if (durationSeconds < 2) throw new Error(`Video too short to trim: ${durationSeconds}s`);
+
+    const trimDuration = durationSeconds - 1;
+    console.log(`▶ [Trim] Cutting: ${durationSeconds}s → ${trimDuration}s (removing last 1 second)`);
+    await execAsync(
+      `${ffmpegPath} -y -i "${tmpInput}" -t ${trimDuration} -c copy "${tmpOutput}"`,
+      { timeout: 120000 }
+    );
+
+    const safeName = (filename || `singing-avatar-${ts}.mp4`)
+      .replace(/[#%?&=+<>|\\/:*"]/g, '').replace(/\s+/g, '-');
+    const key = folder ? `${folder}/${safeName}` : safeName;
+
+    const buf = fs.readFileSync(tmpOutput);
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET, Key: key, Body: buf, ContentType: 'video/mp4',
+    }));
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    const r2Url = `${process.env.R2_PUBLIC_URL}/${encodedKey}`;
+
+    cleanup();
+    console.log(`✅ [Trim] Done → ${r2Url} | original: ${durationSeconds}s → trimmed: ${trimDuration}s`);
+    res.json({ success: true, r2Url, key, durationOriginal: durationSeconds, durationTrimmed: trimDuration });
+  } catch (err) {
+    cleanup();
+    console.error('❌ trim-and-save-to-r2 error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
