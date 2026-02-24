@@ -162,10 +162,17 @@ app.post('/video-to-mp3', async (req, res) => {
       { timeout: 30000 }
     );
     const rawTitle  = (titleOut || '').trim();
-    const safeTitle = (rawTitle || `audio_${ts}`)
+    // Strip Facebook engagement stats prefix e.g. "3.4M views · 127K reactions "
+    // Strip page/channel name suffix e.g. " | lofilulla" or " | PageName"
+    const cleanTitle = rawTitle
+      .replace(/^[\d.,KMBkm]+\s+views?[\s·•,]+[\d.,KMBkm]+\s+\w+\s*/i, '')
+      .replace(/\s*\|.*$/, '')
+      .trim();
+    const safeTitle = (cleanTitle || `audio_${ts}`)
       .replace(/lofilulla/gi, 'NovaZiri')
-      .replace(/[#%?&=+<>|\\/:*"]/g, '')
+      .replace(/[#%?&=+<>|\\/:*"·]/g, '')
       .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
+      .replace(/NovaZiri-NovaZiri/gi, 'NovaZiri')
       || `audio_${ts}`;
 
     console.log(`▶ [MP3] Downloading audio: ${rawTitle}`);
