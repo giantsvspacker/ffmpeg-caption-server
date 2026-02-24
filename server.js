@@ -94,19 +94,21 @@ app.post('/burn-captions', async (req, res) => {
 
 app.get('/list-videos', async (req, res) => {
   try {
+    const prefix = req.query.prefix || '';
     const files = [];
     let continuationToken = undefined;
 
     do {
       const data = await s3.send(new ListObjectsV2Command({
         Bucket: process.env.R2_BUCKET,
+        Prefix: prefix,
         ContinuationToken: continuationToken,
       }));
 
       if (data.Contents) {
         for (const obj of data.Contents) {
           const key = obj.Key;
-          if (!key.startsWith('captioned/') && /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(key)) {
+          if (!key.endsWith('/') && !key.startsWith('captioned/') && /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(key)) {
             files.push({
               filename: key,
               size: obj.Size,
@@ -121,7 +123,7 @@ app.get('/list-videos', async (req, res) => {
 
     files.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
 
-    console.log(`📦 list-videos: found ${files.length} video(s)`);
+    console.log(`📦 list-videos: found ${files.length} video(s) [prefix: '${prefix}']`);
     res.json({ success: true, files, count: files.length });
   } catch (err) {
     console.error('❌ list-videos error:', err.message);
