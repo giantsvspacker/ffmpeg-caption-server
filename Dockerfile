@@ -1,16 +1,15 @@
-# Font fix for Railway deployment
 FROM node:20-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fontconfig \
-    fonts-dejavu-core \
-    && fc-cache -fv \
-    && rm -rf /var/lib/apt/lists/*
+# Install yt-dlp standalone binary (includes Python - no extra install needed)
+RUN apt-get update && apt-get install -y curl --no-install-recommends && \
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json ./
+COPY package*.json ./
 RUN npm install
-
 COPY . .
 
 EXPOSE 3000
