@@ -84,10 +84,12 @@ app.post('/burn-captions', async (req, res) => {
     console.log(`▶ [${videoName}] Uploading to R2...`);
     const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
     const key = `captioned/${safeBaseName}_captioned.mp4`;
-    const downloadUrl = await uploadToR2(out, key);
+    await uploadToR2(out, key);
+    // Return proxy URL instead of public R2 URL (avoids needing R2 public bucket access)
+    const proxyUrl = `${req.protocol}://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
     cleanup();
-    console.log(`✅ [${videoName}] Done! → ${downloadUrl}`);
-    res.json({ success: true, videoUrl: downloadUrl, videoName });
+    console.log(`✅ [${videoName}] Done! → ${proxyUrl}`);
+    res.json({ success: true, videoUrl: proxyUrl, videoName });
   } catch (err) {
     cleanup();
     console.error(`❌ [${videoName}]`, err.message);
