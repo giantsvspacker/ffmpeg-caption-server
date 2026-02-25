@@ -159,20 +159,40 @@ app.post('/video-to-mp3', async (req, res) => {
 
   try {
     console.log(`▶ [MP3] Getting title: ${videoUrl}`);
-    const { stdout: titleOut } = await execAsync(
-      `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${videoUrl}"`,
-      { timeout: 30000 }
-    );
-    const rawTitle  = (titleOut || '').trim();
-    // Strip Facebook engagement stats prefix e.g. "3.4M views · 127K reactions "
-    // Strip page/channel name suffix e.g. " | lofilulla" or " | PageName"
-    const cleanTitle = rawTitle
-      .replace(/^[\d.,KMBkm]+\s+views?[\s·•,]+[\d.,KMBkm]+\s+\w+\s*/i, '')
+    let rawTitle = '';
+    try {
+      const { stdout: titleOut } = await execAsync(
+        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${videoUrl}"`,
+        { timeout: 30000 }
+      );
+      rawTitle = (titleOut || '').trim();
+    } catch(e) { /* title fetch failed silently */ }
+
+    // Strip ALL leading Facebook/Instagram stat groups e.g. "29.3K views · 409 reactions · 934 shares "
+    // Repeats the pattern (NNN word separator) until no more stat groups remain at the front
+    let cleanTitle = rawTitle
+      .replace(/^([\d.,]+[KMBkm]?\s+\w+[\s\u00B7·•,]+)+/i, '')
       .replace(/\s*\|.*$/, '')
       .trim();
+
+    // If what remains looks like only numbers/stats (no real words), discard it
+    if (/^[\d\s.,KMBkm\u00B7·•–-]+$/.test(cleanTitle)) cleanTitle = '';
+
+    // Fallback: try first line of video description when title was empty or stats-only
+    if (!cleanTitle) {
+      try {
+        const { stdout: descOut } = await execAsync(
+          `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(description)s" --no-playlist "${videoUrl}"`,
+          { timeout: 30000 }
+        );
+        const firstLine = (descOut || '').split('\n').map(l => l.trim()).find(l => l.length > 5) || '';
+        cleanTitle = firstLine.replace(/\s*\|.*$/, '').trim();
+      } catch(e) { /* description fetch failed silently */ }
+    }
+
     const safeTitle = (cleanTitle || `audio_${ts}`)
       .replace(/lofilulla/gi, 'NovaZiri')
-      .replace(/[#%?&=+<>|\\/:*"·]/g, '')
+      .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
       .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
       .replace(/NovaZiri-NovaZiri/gi, 'NovaZiri')
       || `audio_${ts}`;
