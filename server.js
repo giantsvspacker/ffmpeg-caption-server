@@ -69,13 +69,16 @@ app.post('/burn-captions', async (req, res) => {
     await downloadFile(videoUrl, inp);
     fs.writeFileSync(sub, srt, 'utf8');
     const style = [
-      'FontSize=8',
+      'FontSize=14',
+      'Fontname=Sakinah',
       'PrimaryColour=&H00FFFFFF','OutlineColour=&H00000000',
       'BackColour=&H80000000','Bold=1','Outline=2',
-      'Shadow=1','Alignment=2','MarginV=50'
+      'Shadow=1','Alignment=2','MarginV=80'
     ].join(',');
     const safeSub = sub.replace(/'/g, "\\'");
-    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
+    const fontsDir = require('path').join(__dirname, 'fonts');
+    // scale to FILL (increase + crop) so no black bars are added
+    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':fontsdir='${fontsDir}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
