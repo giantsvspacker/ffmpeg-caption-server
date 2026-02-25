@@ -375,5 +375,22 @@ app.post('/pick-novaziri-image', async (req, res) => {
   }
 });
 
+app.get('/proxy-r2', async (req, res) => {
+  const key = decodeURIComponent(req.query.key || '');
+  if (!key) return res.status(400).json({ error: 'key required' });
+  try {
+    const data = await s3.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    const ext = (key.split('.').pop() || '').toLowerCase();
+    const mime = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/mp4',
+                   mp3: 'audio/mpeg', webm: 'video/webm', mkv: 'video/x-matroska' };
+    res.setHeader('Content-Type', mime[ext] || 'video/mp4');
+    console.log(`📡 proxy-r2: ${key}`);
+    data.Body.pipe(res);
+  } catch(err) {
+    console.error('❌ proxy-r2 error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
