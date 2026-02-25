@@ -86,7 +86,8 @@ app.post('/burn-captions', async (req, res) => {
     const key = `captioned/${safeBaseName}_captioned.mp4`;
     await uploadToR2(out, key);
     // Return proxy URL instead of public R2 URL (avoids needing R2 public bucket access)
-    const proxyUrl = `${req.protocol}://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
+    // Always use https:// — Railway reverse proxy makes req.protocol return 'http' unreliably
+    const proxyUrl = `https://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
     cleanup();
     console.log(`✅ [${videoName}] Done! → ${proxyUrl}`);
     res.json({ success: true, videoUrl: proxyUrl, videoName });
