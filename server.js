@@ -155,8 +155,9 @@ app.delete('/delete-video', async (req, res) => {
 });
 
 app.post('/video-to-mp3', async (req, res) => {
-  const { videoUrl, folder } = req.body;
+  const { videoUrl, folder, artist } = req.body;
   if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
+  const artistName = artist || (folder && folder.toLowerCase().includes('lufiaurora') ? 'LufiAurora' : 'NovaZiri');
 
   const ts = Date.now();
   const tmpVideo = `/tmp/vid_${ts}`;
@@ -164,7 +165,7 @@ app.post('/video-to-mp3', async (req, res) => {
   const cleanup  = () => [tmpVideo, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
-    console.log(`▶ [MP3] Getting title: ${videoUrl}`);
+    console.log(`▶ [MP3:${artistName}] Getting title: ${videoUrl}`);
     let rawTitle = '';
     try {
       const { stdout: titleOut } = await execAsync(
@@ -197,10 +198,10 @@ app.post('/video-to-mp3', async (req, res) => {
     }
 
     const safeTitle = (cleanTitle || `audio_${ts}`)
-      .replace(/lofilulla/gi, 'NovaZiri')
+      .replace(/lofilulla/gi, artistName)
       .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
       .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
-      .replace(/NovaZiri-NovaZiri/gi, 'NovaZiri')
+      .replace(new RegExp(`${artistName}-${artistName}`, 'gi'), artistName)
       || `audio_${ts}`;
 
     console.log(`▶ [MP3] Downloading audio: ${rawTitle}`);
