@@ -70,7 +70,7 @@ app.post('/burn-captions', async (req, res) => {
     fs.writeFileSync(sub, srt, 'utf8');
     const style = [
       'FontSize=14',
-      'Fontname=Sakinah',
+      'Fontname=Archivo Black',
       'PrimaryColour=&H00FFFFFF','OutlineColour=&H00000000',
       'BackColour=&H80000000','Bold=1','Outline=2',
       'Shadow=1','Alignment=2','MarginV=80'
