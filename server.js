@@ -51,7 +51,9 @@ async function uploadToR2(filePath, key) {
 }
 
 app.post('/burn-captions', async (req, res) => {
-  const { videoUrl, srt, videoName } = req.body;
+  // folder: optional R2 folder to save into (default: 'captioned')
+  // audioDuration: optional seconds to trim output to (for singing avatar sync)
+  const { videoUrl, srt, videoName, folder, audioDuration } = req.body;
   if (!videoUrl || !srt || !videoName)
     return res.status(400).json({ error: 'videoUrl, srt, videoName required' });
 
@@ -78,12 +80,20 @@ app.post('/burn-captions', async (req, res) => {
     const safeSub = sub.replace(/'/g, "\\'");
     const fontsDir = require('path').join(__dirname, 'fonts');
     // scale to FILL (increase + crop) so no black bars are added
-    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':fontsdir='${fontsDir}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart "${out}"`;
+    // trimFlag: if audioDuration provided, cut output to exact song length
+    const trimFlag = (audioDuration && parseFloat(audioDuration) > 0)
+      ? `-t ${parseFloat(audioDuration).toFixed(3)}`
+      : '';
+    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':fontsdir='${fontsDir}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart ${trimFlag} "${out}"`;
     console.log(`▶ [${videoName}] Burning captions...`);
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
     const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
-    const key = `captioned/${safeBaseName}_captioned.mp4`;
+    // Use provided folder (e.g. 'LufiAurora-Auto-Posting') or fallback to 'captioned'
+    // When folder is provided, skip '_captioned' suffix so filename stays clean
+    const outputFolder = folder || 'captioned';
+    const outputName = folder ? `${safeBaseName}.mp4` : `${safeBaseName}_captioned.mp4`;
+    const key = `${outputFolder}/${outputName}`;
     await uploadToR2(out, key);
     // Return proxy URL instead of public R2 URL (avoids needing R2 public bucket access)
     // Always use https:// — Railway reverse proxy makes req.protocol return 'http' unreliably
