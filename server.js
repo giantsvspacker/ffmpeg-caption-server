@@ -75,7 +75,7 @@ app.post('/burn-captions', async (req, res) => {
       'Fontname=Archivo Black',
       'PrimaryColour=&H00FFFFFF','OutlineColour=&H00000000',
       'BackColour=&H80000000','Bold=1','Outline=2',
-      'Shadow=1','Alignment=2','MarginV=80'
+      'Shadow=1','Alignment=2','MarginV=30'
     ].join(',');
     const safeSub = sub.replace(/'/g, "\\'");
     const fontsDir = require('path').join(__dirname, 'fonts');
