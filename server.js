@@ -452,6 +452,48 @@ app.get('/proxy-r2', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.post('/scale-video', async (req, res) => {
+  const { videoUrl, width, height, folder, videoName } = req.body;
+  if (!videoUrl || !width || !height || !videoName)
+    return res.status(400).json({ error: 'videoUrl, width, height, videoName required' });
+
+  const ts  = Date.now();
+  const inp = `/tmp/scale_in_${ts}.mp4`;
+  const out = `/tmp/scale_out_${ts}.mp4`;
+  const cleanup = () => [inp, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  try {
+    const w = parseInt(width);
+    const h = parseInt(height);
+    console.log(`▶ [Scale] Downloading: ${videoUrl}`);
+    await downloadFile(videoUrl, inp);
+
+    console.log(`▶ [Scale] Upscaling to ${w}x${h} with Lanczos...`);
+    const cmd = `${ffmpegPath} -y -threads 2 -i "${inp}" \
+-vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" \
+-c:v libx264 -preset fast -crf 18 -c:a copy -movflags +faststart "${out}"`;
+    await execAsync(cmd, { timeout: 600000 });
+
+    const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
+    const safeBaseName = baseName
+      .replace(/[#%?&=+<>|\\/:*"]/g, '')
+      .replace(/\s+/g, '-').replace(/-+/g, '-').trim();
+    const outputFolder = folder || 'scaled';
+    const key = `${outputFolder}/${safeBaseName}.mp4`;
+
+    console.log(`▶ [Scale] Uploading to R2: ${key}`);
+    await uploadToR2(out, key);
+    const proxyUrl = `https://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
+
+    cleanup();
+    console.log(`✅ [Scale] Done! ${w}x${h} → ${proxyUrl}`);
+    res.json({ success: true, output_url: proxyUrl, key });
+  } catch (err) {
+    cleanup();
+    console.error('❌ scale-video error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
