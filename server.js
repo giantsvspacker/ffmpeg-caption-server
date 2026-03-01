@@ -469,11 +469,7 @@ app.post('/scale-video', async (req, res) => {
     await downloadFile(videoUrl, inp);
 
     console.log(`▶ [Scale] Upscaling to ${w}x${h}...`);
-    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" \
--vf "scale=${w}:${h}:flags=lanczos" \
--c:v libx264 -preset ultrafast -crf 22 \
--x264-params "ref=1:bframes=0:sync-lookahead=0:rc-lookahead=0:nal-hrd=none" \
--c:a copy -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset ultrafast -crf 22 -x264-params "ref=1:bframes=0:sync-lookahead=0:rc-lookahead=0:nal-hrd=none" -c:a copy -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 600000 });
 
     const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
@@ -496,5 +492,6 @@ app.post('/scale-video', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
