@@ -512,5 +512,18 @@ app.post('/scale-video', async (req, res) => {
   }
 });
 
+app.post('/delete-r2', async (req, res) => {
+  const { key } = req.body;
+  if (!key) return res.status(400).json({ error: 'key required' });
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    console.log(`🗑️ Deleted R2 key: ${key}`);
+    res.json({ success: true, deleted: key });
+  } catch (err) {
+    console.error('❌ delete-r2 error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
