@@ -232,10 +232,29 @@ app.post('/video-to-mp3', async (req, res) => {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
       if (m) {
         durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
-        const tm = Math.floor(durationSeconds / 60), ts2 = durationSeconds % 60;
-        endTime = `${tm}:${ts2.toString().padStart(2, '0')}`;
       }
     }
+
+    // Detect trailing silence and subtract it so RunningHub avatar trims to real audio end
+    try {
+      let silenceOut = '';
+      try {
+        const r = await execAsync(`${ffmpegPath} -i "${tmpMp3}" -af "silencedetect=noise=-35dB:d=0.3" -f null /dev/null`, { timeout: 30000 });
+        silenceOut = r.stderr || '';
+      } catch(e2) { silenceOut = e2.stderr || ''; }
+      const silenceStarts = [...silenceOut.matchAll(/silence_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
+      if (silenceStarts.length > 0) {
+        const lastSilenceStart = silenceStarts[silenceStarts.length - 1];
+        const trailingSec = durationSeconds - lastSilenceStart;
+        if (trailingSec > 0.3 && lastSilenceStart > 1) {
+          console.log(`▶ [MP3] Trailing silence detected: cutting ${durationSeconds}s → ${lastSilenceStart.toFixed(3)}s (removed ${trailingSec.toFixed(2)}s)`);
+          durationSeconds = parseFloat(lastSilenceStart.toFixed(3));
+        }
+      }
+    } catch(e) { /* silencedetect failed silently — keep full duration */ }
+
+    const tm = Math.floor(durationSeconds / 60), ts2 = Math.floor(durationSeconds % 60);
+    endTime = `${tm}:${ts2.toString().padStart(2, '0')}`;
 
     const mp3Name = `${safeTitle}.mp3`;
     const key     = folder ? `${folder}/${mp3Name}` : `mp3/${mp3Name}`;
