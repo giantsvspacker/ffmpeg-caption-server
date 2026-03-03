@@ -533,8 +533,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       { timeout: 300000 }
     );
 
-    console.log(`▶ [YT] Scaling to ${w}x${h}...`);
-    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
+    console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000 });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
