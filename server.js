@@ -6,6 +6,7 @@ const https = require('https');
 const http = require('http');
 const { promisify } = require('util');
 const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const ytdl = require('@distube/ytdl-core');
 const execAsync = promisify(exec);
 
 const app = express();
@@ -508,6 +509,58 @@ app.post('/scale-video', async (req, res) => {
   } catch (err) {
     cleanup();
     console.error('❌ scale-video error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/download-youtube-to-r2', async (req, res) => {
+  const { youtubeUrl, folder, videoName, width, height } = req.body;
+  if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
+
+  const w = parseInt(width)  || 2160;
+  const h = parseInt(height) || 3840;
+  const ts  = Date.now();
+  const inp = `/tmp/yt_in_${ts}.mp4`;
+  const out = `/tmp/yt_out_${ts}.mp4`;
+  const cleanup = () => [inp, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  req.setTimeout && req.setTimeout(600000);
+  res.setTimeout(600000);
+
+  try {
+    console.log(`▶ [YT] Fetching info: ${youtubeUrl}`);
+    const info = await ytdl.getInfo(youtubeUrl);
+    const rawTitle = info.videoDetails.title || 'video';
+    const safeName = videoName
+      || rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 80) + '.mp4';
+
+    console.log(`▶ [YT] Downloading: ${rawTitle}`);
+    await new Promise((resolve, reject) => {
+      const stream = ytdl.downloadFromInfo(info, {
+        quality: 'highestvideo+highestaudio',
+        filter: 'audioandvideo',
+      });
+      const file = fs.createWriteStream(inp);
+      stream.pipe(file);
+      file.on('finish', resolve);
+      stream.on('error', reject);
+      file.on('error', reject);
+    });
+
+    console.log(`▶ [YT] Scaling to ${w}x${h}...`);
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
+    await execAsync(cmd, { timeout: 540000 });
+
+    const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
+    const key = `${folderPath}/${safeName}`;
+    const publicUrl = await uploadToR2(out, key);
+
+    cleanup();
+    console.log(`✅ [YT] Done: ${publicUrl}`);
+    res.json({ success: true, output_url: publicUrl, key, title: rawTitle, filename: safeName });
+  } catch (err) {
+    cleanup();
+    console.error('❌ download-youtube-to-r2 error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
