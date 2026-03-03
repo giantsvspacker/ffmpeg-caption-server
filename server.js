@@ -21,6 +21,21 @@ const s3 = new S3Client({
   },
 });
 
+// YouTube cookies helper — reads YOUTUBE_COOKIES env var and writes to temp file
+const COOKIES_PATH = '/tmp/yt-cookies.txt';
+function getYtCookiesFlag() {
+  const cookieData = process.env.YOUTUBE_COOKIES;
+  if (cookieData && cookieData.trim()) {
+    try {
+      fs.writeFileSync(COOKIES_PATH, cookieData.trim(), 'utf8');
+      return `--cookies "${COOKIES_PATH}"`;
+    } catch(e) {
+      console.warn('⚠️ Failed to write YouTube cookies:', e.message);
+    }
+  }
+  return '';
+}
+
 async function downloadFile(url, dest, hops = 0) {
   if (hops > 5) throw new Error('Too many redirects');
   return new Promise((resolve, reject) => {
@@ -512,11 +527,13 @@ app.post('/download-youtube-to-r2', async (req, res) => {
   const cleanup = () => [inp, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
+    const cookiesFlag = getYtCookiesFlag();
+
     let rawTitle = '';
     try {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
-        `--extractor-args "youtube:player_client=android,ios" "${youtubeUrl}"`,
+        `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} "${youtubeUrl}"`,
         { timeout: 30000 }
       );
       rawTitle = (titleOut || '').trim();
@@ -529,7 +546,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     await execAsync(
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
       `--no-playlist --merge-output-format mp4 ` +
-      `--extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
+      `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
       { timeout: 300000 }
     );
 
