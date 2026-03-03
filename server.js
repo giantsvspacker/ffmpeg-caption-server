@@ -6,7 +6,6 @@ const https = require('https');
 const http = require('http');
 const { promisify } = require('util');
 const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-const ytdl = require('@distube/ytdl-core');
 const execAsync = promisify(exec);
 
 const app = express();
@@ -52,8 +51,6 @@ async function uploadToR2(filePath, key) {
 }
 
 app.post('/burn-captions', async (req, res) => {
-  // folder: optional R2 folder to save into (default: 'captioned')
-  // audioDuration: optional seconds to trim output to (for singing avatar sync)
   const { videoUrl, srt, videoName, folder, audioDuration } = req.body;
   if (!videoUrl || !srt || !videoName)
     return res.status(400).json({ error: 'videoUrl, srt, videoName required' });
@@ -80,8 +77,6 @@ app.post('/burn-captions', async (req, res) => {
     ].join(',');
     const safeSub = sub.replace(/'/g, "\\'");
     const fontsDir = require('path').join(__dirname, 'fonts');
-    // scale to FILL (increase + crop) so no black bars are added
-    // trimFlag: if audioDuration provided, cut output to exact song length
     const trimFlag = (audioDuration && parseFloat(audioDuration) > 0)
       ? `-t ${parseFloat(audioDuration).toFixed(3)}`
       : '';
@@ -90,14 +85,10 @@ app.post('/burn-captions', async (req, res) => {
     await execAsync(cmd, { timeout: 900000 });
     console.log(`▶ [${videoName}] Uploading to R2...`);
     const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
-    // Use provided folder (e.g. 'LufiAurora-Auto-Posting') or fallback to 'captioned'
-    // When folder is provided, skip '_captioned' suffix so filename stays clean
     const outputFolder = folder || 'captioned';
     const outputName = folder ? `${safeBaseName}.mp4` : `${safeBaseName}_captioned.mp4`;
     const key = `${outputFolder}/${outputName}`;
     await uploadToR2(out, key);
-    // Return proxy URL instead of public R2 URL (avoids needing R2 public bucket access)
-    // Always use https:// — Railway reverse proxy makes req.protocol return 'http' unreliably
     const proxyUrl = `https://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
     cleanup();
     console.log(`✅ [${videoName}] Done! → ${proxyUrl}`);
@@ -186,17 +177,13 @@ app.post('/video-to-mp3', async (req, res) => {
       rawTitle = (titleOut || '').trim();
     } catch(e) { /* title fetch failed silently */ }
 
-    // Strip ALL leading Facebook/Instagram stat groups e.g. "29.3K views · 409 reactions · 934 shares "
-    // Repeats the pattern (NNN word separator) until no more stat groups remain at the front
     let cleanTitle = rawTitle
       .replace(/^([\d.,]+[KMBkm]?\s+\w+[\s\u00B7·•,]+)+/i, '')
       .replace(/\s*\|.*$/, '')
       .trim();
 
-    // If what remains looks like only numbers/stats (no real words), discard it
     if (/^[\d\s.,KMBkm\u00B7·•–-]+$/.test(cleanTitle)) cleanTitle = '';
 
-    // Fallback: try first line of video description when title was empty or stats-only
     if (!cleanTitle) {
       try {
         const { stdout: descOut } = await execAsync(
@@ -236,7 +223,6 @@ app.post('/video-to-mp3', async (req, res) => {
       }
     }
 
-    // Detect trailing silence and subtract it so RunningHub avatar trims to real audio end
     try {
       let silenceOut = '';
       try {
@@ -472,6 +458,7 @@ app.get('/proxy-r2', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.post('/scale-video', async (req, res) => {
   const { videoUrl, width, height, folder, videoName } = req.body;
   if (!videoUrl || !width || !height || !videoName)
@@ -524,28 +511,25 @@ app.post('/download-youtube-to-r2', async (req, res) => {
   const out = `/tmp/yt_out_${ts}.mp4`;
   const cleanup = () => [inp, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
-  req.setTimeout && req.setTimeout(600000);
-  res.setTimeout(600000);
-
   try {
-    console.log(`▶ [YT] Fetching info: ${youtubeUrl}`);
-    const info = await ytdl.getInfo(youtubeUrl);
-    const rawTitle = info.videoDetails.title || 'video';
-    const safeName = videoName
-      || rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 80) + '.mp4';
+    let rawTitle = '';
+    try {
+      const { stdout: titleOut } = await execAsync(
+        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${youtubeUrl}"`,
+        { timeout: 30000 }
+      );
+      rawTitle = (titleOut || '').trim();
+    } catch(e) { /* title fetch failed silently */ }
 
-    console.log(`▶ [YT] Downloading: ${rawTitle}`);
-    await new Promise((resolve, reject) => {
-      const stream = ytdl.downloadFromInfo(info, {
-        quality: 'highestvideo+highestaudio',
-        filter: 'audioandvideo',
-      });
-      const file = fs.createWriteStream(inp);
-      stream.pipe(file);
-      file.on('finish', resolve);
-      stream.on('error', reject);
-      file.on('error', reject);
-    });
+    const safeName = videoName ||
+      (rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 80) + '.mp4');
+
+    console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
+    await execAsync(
+      `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+      `--no-playlist --merge-output-format mp4 -o "${inp}" "${youtubeUrl}"`,
+      { timeout: 300000 }
+    );
 
     console.log(`▶ [YT] Scaling to ${w}x${h}...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
