@@ -515,7 +515,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     let rawTitle = '';
     try {
       const { stdout: titleOut } = await execAsync(
-        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${youtubeUrl}"`,
+        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
+        `--extractor-args "youtube:player_client=android,ios" "${youtubeUrl}"`,
         { timeout: 30000 }
       );
       rawTitle = (titleOut || '').trim();
@@ -527,7 +528,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
     await execAsync(
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-      `--no-playlist --merge-output-format mp4 -o "${inp}" "${youtubeUrl}"`,
+      `--no-playlist --merge-output-format mp4 ` +
+      `--extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
       { timeout: 300000 }
     );
 
