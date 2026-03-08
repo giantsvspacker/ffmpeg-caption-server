@@ -582,5 +582,5 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0', maxBuffer: '200MB' }));
+app.listen(PORT, () => console.log(`Server running on port ${PORT} — v2.1.0 (maxBuffer 200MB fix)`));
