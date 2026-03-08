@@ -7,6 +7,7 @@ const http = require('http');
 const { promisify } = require('util');
 const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const execAsync = promisify(exec);
+const MAX_BUFFER = 1024 * 1024 * 200; // 200 MB — prevents stderr maxBuffer exceeded
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -97,7 +98,7 @@ app.post('/burn-captions', async (req, res) => {
       : '';
     const cmd = `${ffmpegPath} -y -threads 1 -i "${inp}" -vf "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,unsharp=5:5:0.8:5:5:0.0,eq=brightness=0.04:contrast=1.08:saturation=1.15,subtitles='${safeSub}':fontsdir='${fontsDir}':force_style='${style}'" -c:v libx264 -preset veryfast -crf 18 -x264-params threads=1 -profile:v high -level 4.1 -c:a aac -b:a 128k -max_muxing_queue_size 256 -movflags +faststart ${trimFlag} "${out}"`;
     console.log(`▶ [${videoName}] Burning captions...`);
-    await execAsync(cmd, { timeout: 900000 });
+    await execAsync(cmd, { timeout: 900000, maxBuffer: MAX_BUFFER });
     console.log(`▶ [${videoName}] Uploading to R2...`);
     const safeBaseName = baseName.replace(/[#%?&=+]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
     const outputFolder = folder || 'captioned';
@@ -492,7 +493,7 @@ app.post('/scale-video', async (req, res) => {
 
     console.log(`▶ [Scale] Upscaling to ${w}x${h}...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
-    await execAsync(cmd, { timeout: 600000 });
+    await execAsync(cmd, { timeout: 900000, maxBuffer: MAX_BUFFER });
 
     const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
     const safeBaseName = baseName
@@ -552,7 +553,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
-    await execAsync(cmd, { timeout: 540000 });
+    await execAsync(cmd, { timeout: 900000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
     const key = `${folderPath}/${safeName}`;
