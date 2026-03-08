@@ -7,7 +7,7 @@ const http = require('http');
 const { promisify } = require('util');
 const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const execAsync = promisify(exec);
-const MAX_BUFFER = 1024 * 1024 * 200; // 200 MB — prevents stderr maxBuffer exceeded
+const MAX_BUFFER = 1024 * 1024 * 200; // 200 MB — prevents stderr maxBuffer exceeded on long videos
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -188,7 +188,7 @@ app.post('/video-to-mp3', async (req, res) => {
     try {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${videoUrl}"`,
-        { timeout: 30000 }
+        { timeout: 30000, maxBuffer: MAX_BUFFER }
       );
       rawTitle = (titleOut || '').trim();
     } catch(e) { /* title fetch failed silently */ }
@@ -204,7 +204,7 @@ app.post('/video-to-mp3', async (req, res) => {
       try {
         const { stdout: descOut } = await execAsync(
           `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(description)s" --no-playlist "${videoUrl}"`,
-          { timeout: 30000 }
+          { timeout: 30000, maxBuffer: MAX_BUFFER }
         );
         const firstLine = (descOut || '').split('\n').map(l => l.trim()).find(l => l.length > 5) || '';
         cleanTitle = firstLine.replace(/\s*\|.*$/, '').trim();
@@ -222,17 +222,17 @@ app.post('/video-to-mp3', async (req, res) => {
     await execAsync(
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestaudio[ext=m4a]/bestaudio/best" ` +
       `--no-playlist -o "${tmpVideo}" "${videoUrl}"`,
-      { timeout: 300000 }
+      { timeout: 300000, maxBuffer: MAX_BUFFER }
     );
 
     console.log(`▶ [MP3] Converting to MP3...`);
     await execAsync(
       `${ffmpegPath} -y -i "${tmpVideo}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
-      { timeout: 120000 }
+      { timeout: 120000, maxBuffer: MAX_BUFFER }
     );
 
     let durationSeconds = 0, endTime = '0:00';
-    try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000 }); } catch(e) {
+    try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000, maxBuffer: MAX_BUFFER }); } catch(e) {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
       if (m) {
         durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
@@ -242,7 +242,7 @@ app.post('/video-to-mp3', async (req, res) => {
     try {
       let silenceOut = '';
       try {
-        const r = await execAsync(`${ffmpegPath} -i "${tmpMp3}" -af "silencedetect=noise=-35dB:d=0.3" -f null /dev/null`, { timeout: 30000 });
+        const r = await execAsync(`${ffmpegPath} -i "${tmpMp3}" -af "silencedetect=noise=-35dB:d=0.3" -f null /dev/null`, { timeout: 30000, maxBuffer: MAX_BUFFER });
         silenceOut = r.stderr || '';
       } catch(e2) { silenceOut = e2.stderr || ''; }
       const silenceStarts = [...silenceOut.matchAll(/silence_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
@@ -332,7 +332,7 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
     await downloadFile(url, tmpInput);
 
     let durationSeconds = 0;
-    try { await execAsync(`${ffmpegPath} -i "${tmpInput}"`, { timeout: 15000 }); } catch(e) {
+    try { await execAsync(`${ffmpegPath} -i "${tmpInput}"`, { timeout: 15000, maxBuffer: MAX_BUFFER }); } catch(e) {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
       if (m) durationSeconds = +m[1]*3600 + +m[2]*60 + parseFloat(m[3]);
     }
@@ -346,7 +346,7 @@ app.post('/trim-and-save-to-r2', async (req, res) => {
 
     await execAsync(
       `${ffmpegPath} -y -i "${tmpInput}" -t ${trimDuration} -c copy "${tmpOutput}"`,
-      { timeout: 120000 }
+      { timeout: 120000, maxBuffer: MAX_BUFFER }
     );
 
     const safeName = (filename || `singing-avatar-${ts}.mp4`)
@@ -493,7 +493,7 @@ app.post('/scale-video', async (req, res) => {
 
     console.log(`▶ [Scale] Upscaling to ${w}x${h}...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
-    await execAsync(cmd, { timeout: 900000, maxBuffer: MAX_BUFFER });
+    await execAsync(cmd, { timeout: 600000, maxBuffer: MAX_BUFFER });
 
     const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
     const safeBaseName = baseName
@@ -535,7 +535,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
         `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} "${youtubeUrl}"`,
-        { timeout: 30000 }
+        { timeout: 30000, maxBuffer: MAX_BUFFER }
       );
       rawTitle = (titleOut || '').trim();
     } catch(e) { /* title fetch failed silently */ }
@@ -548,12 +548,12 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
       `--no-playlist --merge-output-format mp4 ` +
       `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
-      { timeout: 300000 }
+      { timeout: 300000, maxBuffer: MAX_BUFFER }
     );
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
-    await execAsync(cmd, { timeout: 900000, maxBuffer: MAX_BUFFER });
+    await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
     const key = `${folderPath}/${safeName}`;
