@@ -31,16 +31,23 @@ function getYtCookiesFlag() {
   const cookieData = process.env.YOUTUBE_COOKIES;
   if (cookieData && cookieData.trim()) {
     try {
-      // Fix: Railway may convert tabs to spaces — restore proper tab-separated format
-      const fixed = cookieData.trim().split('\n').map(line => {
-        if (line.startsWith('#') || line.trim() === '') return line;
-        // If line has no tabs but has multiple spaces, convert space-separated columns back to tabs
-        if (!line.includes('\t')) {
-          return line.replace(/^(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(\S+)\s+(.+)$/, '$1\t$2\t$3\t$4\t$5\t$6\t$7');
+      // Step 1: Normalise line endings (Windows CRLF → LF) and strip stray \r
+      const normalised = cookieData.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // Step 2: Fix tabs — Railway may convert tabs to spaces; restore them
+      const fixed = normalised.trim().split('\n').map(line => {
+        const trimmed = line.trimEnd(); // remove trailing whitespace / \r remnants
+        if (trimmed.startsWith('#') || trimmed.trim() === '') return trimmed;
+        // If no tabs present, convert multi-space columns back to tab-separated
+        if (!trimmed.includes('\t')) {
+          return trimmed.replace(
+            /^(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(\S+)\s+(.+)$/,
+            '$1\t$2\t$3\t$4\t$5\t$6\t$7'
+          );
         }
-        return line;
+        return trimmed;
       }).join('\n');
-      fs.writeFileSync(COOKIES_PATH, fixed, 'utf8');
+      fs.writeFileSync(COOKIES_PATH, fixed + '\n', 'utf8');
+      console.log(`🍪 Cookies written: ${fixed.split('\n').filter(l => l && !l.startsWith('#')).length} entries`);
       return `--cookies "${COOKIES_PATH}"`;
     } catch(e) {
       console.warn('⚠️ Failed to write YouTube cookies:', e.message);
@@ -581,9 +588,10 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
     if (ytErr) {
-      const msg = ytErr.message || '';
+      const msg = (ytErr.message || '') + (ytErr.stderr || '');
+      console.error('❌ [YT] yt-dlp error:', msg.slice(0, 800));
       if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
-      if (msg.includes('Sign in') || msg.includes('age') || msg.includes('Only images'))
+      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age'))
         throw new Error('YouTube age-restriction: cookies are missing or expired. Re-export fresh cookies from your browser.');
       throw ytErr;
     }
