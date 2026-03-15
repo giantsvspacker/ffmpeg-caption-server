@@ -548,10 +548,12 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
-    // tv_embedded+ios: bypass n-challenge AND support age-restricted content with cookies
-    // android+ios: no cookies path — fastest, no n-challenge needed
+    // yt-dlp 2026: only web-based clients support cookies (ios/android/tv_embedded rejected)
+    // mweb = mobile web — supports cookies, bypasses n-challenge, works for age-restricted
+    // web_embedded + web as fallbacks
+    // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
-      ? '--extractor-args "youtube:player_client=tv_embedded,ios,android"'
+      ? '--extractor-args "youtube:player_client=mweb,web_embedded,web"'
       : '--extractor-args "youtube:player_client=android,ios"';
 
     let rawTitle = '';
