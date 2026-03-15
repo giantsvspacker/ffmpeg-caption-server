@@ -551,10 +551,11 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     // yt-dlp 2026 requires explicit JS runtime (changed default to Deno, not Node.js)
     // Tell it to use the same Node.js binary that's running this server
     const jsRuntime = `--js-runtimes "node:${process.execPath}"`;
-    // web client: only client that fully supports cookies + age-restricted content
+    // web client required for authenticated + age-restricted content (supports cookies)
+    // web_creator as fallback also handles age-restricted via creator session
     // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
-      ? ''
+      ? '--extractor-args "youtube:player_client=web,web_creator"'
       : '--extractor-args "youtube:player_client=android,ios"';
 
     let rawTitle = '';
@@ -630,9 +631,9 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0', maxBuffer: '200MB' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.2.0', maxBuffer: '200MB' }));
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.1.0 (maxBuffer 200MB fix)`);
+  console.log(`Server running on port ${PORT} — v2.2.0 (explicit web client for auth)`);
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
