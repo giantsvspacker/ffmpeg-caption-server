@@ -592,14 +592,35 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         } else { break; }
       }
     }
+
+    // If cookie-based download got a "Sign in" error, retry WITHOUT cookies using android,ios.
+    // Bad/expired cookies cause Sign-in errors even on non-age-restricted videos.
+    // If android,ios also fails → video is genuinely age-restricted → skip.
+    if (ytErr && cookiesFlag) {
+      const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
+      if (msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('confirm your age') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden')) {
+        console.warn('⚠️ [YT] Cookie path failed — retrying without cookies (android,ios)...');
+        try {
+          await execAsync(
+            `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+            `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+            `${jsRuntime} --extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
+            { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+          );
+          console.log('✅ [YT] Fallback (no-cookies) succeeded');
+          ytErr = null;
+        } catch (e2) { ytErr = e2; }
+      }
+    }
+
     if (ytErr) {
       const msg = (ytErr.message || '') + (ytErr.stderr || '');
       console.error('❌ [YT] yt-dlp error:', msg.slice(0, 800));
       if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
-      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age')) {
-        console.log(`⏭️ [YT] Age-restricted — skipping: ${youtubeUrl}`);
+      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age') || msg.includes('403') || msg.includes('Forbidden')) {
+        console.log(`⏭️ [YT] Skipping — blocked/age-restricted: ${youtubeUrl}`);
         cleanup();
-        return res.json({ skipped: true, reason: 'age-restricted', youtubeUrl });
+        return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
       throw ytErr;
     }
@@ -673,9 +694,9 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.4.0', maxBuffer: '200MB' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.6.0', maxBuffer: '200MB' }));
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.4.0 (skip age-restricted videos)`);
+  console.log(`Server running on port ${PORT} — v2.6.0 (fallback + 403 skip)`);
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
