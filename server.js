@@ -9,6 +9,9 @@ const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, G
 const execAsync = promisify(exec);
 const MAX_BUFFER = 1024 * 1024 * 200; // 200 MB — prevents stderr maxBuffer exceeded on long videos
 
+// Make node binary visible to yt-dlp subprocesses so they can solve YouTube's n-challenge
+const ytDlpEnv = { ...process.env, PATH: `${require('path').dirname(process.execPath)}:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}` };
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
@@ -540,7 +543,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
         `${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
-        { timeout: 30000, maxBuffer: MAX_BUFFER }
+        { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
       );
       rawTitle = (titleOut || '').trim();
     } catch(e) { /* title fetch failed silently */ }
@@ -549,12 +552,32 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       (rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 80) + '.mp4');
 
     console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
-    await execAsync(
-      `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-      `--no-playlist --merge-output-format mp4 ` +
-      `${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
-      { timeout: 300000, maxBuffer: MAX_BUFFER }
-    );
+    // Retry once on 429 (rate-limit) after a short wait
+    let ytErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await execAsync(
+          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+          `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+          `${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+          { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+        );
+        ytErr = null; break;
+      } catch (e) {
+        ytErr = e;
+        if (attempt === 1 && (e.message || '').includes('429')) {
+          console.warn('⚠️ [YT] 429 rate-limit hit — waiting 30s before retry...');
+          await new Promise(r => setTimeout(r, 30000));
+        } else { break; }
+      }
+    }
+    if (ytErr) {
+      const msg = ytErr.message || '';
+      if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
+      if (msg.includes('Sign in') || msg.includes('age') || msg.includes('Only images'))
+        throw new Error('YouTube age-restriction: cookies are missing or expired. Re-export fresh cookies from your browser.');
+      throw ytErr;
+    }
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
     const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
@@ -588,4 +611,12 @@ app.post('/delete-r2', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0', maxBuffer: '200MB' }));
-app.listen(PORT, () => console.log(`Server running on port ${PORT} — v2.1.0 (maxBuffer 200MB fix)`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT} — v2.1.0 (maxBuffer 200MB fix)`);
+  // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
+  exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
+    const out = (stdout || '').trim();
+    if (out) console.log('🔄 yt-dlp update:', out.split('\n')[0]);
+    else if (err) console.warn('⚠️ yt-dlp update failed (read-only fs?):', err.message.split('\n')[0]);
+  });
+});
