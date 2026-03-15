@@ -543,8 +543,9 @@ app.post('/download-youtube-to-r2', async (req, res) => {
   const h = parseInt(height) || 3840;
   const ts  = Date.now();
   const inp = `/tmp/yt_in_${ts}.mp4`;
+  const trimmed = `/tmp/yt_trim_${ts}.mp4`;
   const out = `/tmp/yt_out_${ts}.mp4`;
-  const cleanup = () => [inp, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+  const cleanup = () => [inp, trimmed, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
     const cookiesFlag = getYtCookiesFlag();
@@ -600,8 +601,46 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       throw ytErr;
     }
 
+    // Detect and trim freeze-frame endings (static image + audio, no motion)
+    let sourceForScale = inp;
+    try {
+      let totalDuration = 0;
+      try {
+        await execAsync(`${ffmpegPath} -i "${inp}"`, { timeout: 15000, maxBuffer: MAX_BUFFER });
+      } catch(e) {
+        const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+        if (m) totalDuration = +m[1]*3600 + +m[2]*60 + parseFloat(m[3]);
+      }
+      if (totalDuration > 8) {
+        let freezeOut = '';
+        try {
+          const r = await execAsync(
+            `${ffmpegPath} -i "${inp}" -vf "freezedetect=noise=0.003:duration=1.5" -f null /dev/null`,
+            { timeout: 120000, maxBuffer: MAX_BUFFER }
+          );
+          freezeOut = r.stderr || '';
+        } catch(e) { freezeOut = e.stderr || ''; }
+
+        const freezeStarts = [...freezeOut.matchAll(/freeze_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
+        // Only trim if the freeze starts in the last 40% of the video
+        const trimAt = freezeStarts.find(t => t > totalDuration * 0.60);
+        if (trimAt && trimAt > 3) {
+          console.log(`✂️ [YT] Freeze-frame ending at ${trimAt.toFixed(2)}s / ${totalDuration.toFixed(2)}s — trimming`);
+          await execAsync(
+            `${ffmpegPath} -y -i "${inp}" -t ${trimAt.toFixed(3)} -c copy "${trimmed}"`,
+            { timeout: 120000, maxBuffer: MAX_BUFFER }
+          );
+          sourceForScale = trimmed;
+        } else {
+          console.log(`✅ [YT] No freeze-frame ending detected (${totalDuration.toFixed(1)}s)`);
+        }
+      }
+    } catch(e) {
+      console.warn('⚠️ [YT] Freeze detection skipped:', e.message);
+    }
+
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
-    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
@@ -631,9 +670,9 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.2.0', maxBuffer: '200MB' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.3.0', maxBuffer: '200MB' }));
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.2.0 (explicit web client for auth)`);
+  console.log(`Server running on port ${PORT} — v2.3.0 (freeze-frame end trimming)`);
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
