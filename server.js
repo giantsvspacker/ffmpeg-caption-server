@@ -548,8 +548,10 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
+    // yt-dlp 2026 requires explicit JS runtime (changed default to Deno, not Node.js)
+    // Tell it to use the same Node.js binary that's running this server
+    const jsRuntime = `--js-runtimes "nodejs:${process.execPath}"`;
     // web client: only client that fully supports cookies + age-restricted content
-    // n-challenge may warn but age-verified cookies still allow download
     // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
       ? ''
@@ -559,7 +561,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     try {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
-        `${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
+        `${jsRuntime} ${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
         { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
       );
       rawTitle = (titleOut || '').trim();
@@ -576,7 +578,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         await execAsync(
           `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
-          `${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+          `${jsRuntime} ${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
         );
         ytErr = null; break;
