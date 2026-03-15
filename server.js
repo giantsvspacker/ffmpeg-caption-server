@@ -550,7 +550,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     const cookiesFlag = getYtCookiesFlag();
     // yt-dlp 2026 requires explicit JS runtime (changed default to Deno, not Node.js)
     // Tell it to use the same Node.js binary that's running this server
-    const jsRuntime = `--js-runtimes "nodejs:${process.execPath}"`;
+    const jsRuntime = `--js-runtimes "node:${process.execPath}"`;
     // web client: only client that fully supports cookies + age-restricted content
     // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
