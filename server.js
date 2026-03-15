@@ -596,8 +596,11 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const msg = (ytErr.message || '') + (ytErr.stderr || '');
       console.error('❌ [YT] yt-dlp error:', msg.slice(0, 800));
       if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
-      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age'))
-        throw new Error('YouTube age-restriction: cookies are missing or expired. Re-export fresh cookies from your browser.');
+      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age')) {
+        console.log(`⏭️ [YT] Age-restricted — skipping: ${youtubeUrl}`);
+        cleanup();
+        return res.json({ skipped: true, reason: 'age-restricted', youtubeUrl });
+      }
       throw ytErr;
     }
 
@@ -670,9 +673,9 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.3.0', maxBuffer: '200MB' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.4.0', maxBuffer: '200MB' }));
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.3.0 (freeze-frame end trimming)`);
+  console.log(`Server running on port ${PORT} — v2.4.0 (skip age-restricted videos)`);
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
