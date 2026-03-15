@@ -548,12 +548,11 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
-    // yt-dlp 2026: only web-based clients support cookies (ios/android/tv_embedded rejected)
-    // mweb = mobile web — supports cookies, bypasses n-challenge, works for age-restricted
-    // web_embedded + web as fallbacks
+    // yt-dlp 2026: web_embedded supports cookies without needing n-challenge or GVS PO Token
+    // player_skip=js on web = skip JS player (bypass n-challenge, slight throttle ok)
     // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
-      ? '--extractor-args "youtube:player_client=mweb,web_embedded,web"'
+      ? '--extractor-args "youtube:player_client=web_embedded,web" --extractor-args "youtube:player_skip=js"'
       : '--extractor-args "youtube:player_client=android,ios"';
 
     let rawTitle = '';
