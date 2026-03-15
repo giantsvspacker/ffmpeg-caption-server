@@ -31,7 +31,16 @@ function getYtCookiesFlag() {
   const cookieData = process.env.YOUTUBE_COOKIES;
   if (cookieData && cookieData.trim()) {
     try {
-      fs.writeFileSync(COOKIES_PATH, cookieData.trim(), 'utf8');
+      // Fix: Railway may convert tabs to spaces — restore proper tab-separated format
+      const fixed = cookieData.trim().split('\n').map(line => {
+        if (line.startsWith('#') || line.trim() === '') return line;
+        // If line has no tabs but has multiple spaces, convert space-separated columns back to tabs
+        if (!line.includes('\t')) {
+          return line.replace(/^(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(\S+)\s+(.+)$/, '$1\t$2\t$3\t$4\t$5\t$6\t$7');
+        }
+        return line;
+      }).join('\n');
+      fs.writeFileSync(COOKIES_PATH, fixed, 'utf8');
       return `--cookies "${COOKIES_PATH}"`;
     } catch(e) {
       console.warn('⚠️ Failed to write YouTube cookies:', e.message);
