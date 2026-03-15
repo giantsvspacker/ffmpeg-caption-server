@@ -529,12 +529,16 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
+    // Use web client when cookies are present (android/ios clients ignore cookies)
+    const extractorArgs = cookiesFlag
+      ? '--extractor-args "youtube:player_client=web"'
+      : '--extractor-args "youtube:player_client=android,ios"';
 
     let rawTitle = '';
     try {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
-        `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} "${youtubeUrl}"`,
+        `${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
         { timeout: 30000, maxBuffer: MAX_BUFFER }
       );
       rawTitle = (titleOut || '').trim();
@@ -547,7 +551,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     await execAsync(
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
       `--no-playlist --merge-output-format mp4 ` +
-      `--extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+      `${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
       { timeout: 300000, maxBuffer: MAX_BUFFER }
     );
 
