@@ -548,10 +548,11 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
-    // web_embedded: web-based client, supports cookies, no GVS PO Token needed
+    // web client: only client that fully supports cookies + age-restricted content
+    // n-challenge may warn but age-verified cookies still allow download
     // No-cookies path: android+ios fastest, no n-challenge needed
     const extractorArgs = cookiesFlag
-      ? '--extractor-args "youtube:player_client=web_embedded"'
+      ? ''
       : '--extractor-args "youtube:player_client=android,ios"';
 
     let rawTitle = '';
