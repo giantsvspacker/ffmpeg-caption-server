@@ -529,10 +529,11 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getYtCookiesFlag();
-    // Use web client when cookies are present (android/ios clients ignore cookies)
+    // web_creator supports cookies + skips n-challenge (web client needs JS runtime)
+    // android/ios are faster when no cookies needed
     const extractorArgs = cookiesFlag
-      ? '--extractor-args "youtube:player_client=web"'
-      : '--extractor-args "youtube:player_client=android,ios"';
+      ? '--extractor-args "youtube:player_client=web_creator,tv_embedded"'
+      : '--extractor-args "youtube:player_client=android,ios,tv_embedded"';
 
     let rawTitle = '';
     try {
