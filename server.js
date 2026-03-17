@@ -25,19 +25,42 @@ const s3 = new S3Client({
   },
 });
 
-// YouTube cookies helper — reads YOUTUBE_COOKIES env var and writes to temp file
-const COOKIES_PATH = '/tmp/yt-cookies.txt';
-function getYtCookiesFlag() {
-  const cookieData = process.env.YOUTUBE_COOKIES;
+// Universal browser cookies — stored in R2 at key: _config/cookies.txt (no size limit)
+// Fallback: BROWSER_COOKIES or YOUTUBE_COOKIES env var (32KB limit, legacy)
+// To update cookies: upload new cookies.txt to R2 → _config/cookies.txt → redeploy server
+const COOKIES_PATH = '/tmp/browser-cookies.txt';
+const COOKIES_R2_KEY = '_config/cookies.txt';
+let cookiesReady = false; // loaded once at startup
+
+async function loadCookiesFromR2() {
+  try {
+    const { GetObjectCommand } = require('@aws-sdk/client-s3');
+    const resp = await s3.send(new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: COOKIES_R2_KEY
+    }));
+    const chunks = [];
+    for await (const chunk of resp.Body) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString('utf8');
+    if (raw && raw.trim()) {
+      fs.writeFileSync(COOKIES_PATH, raw, 'utf8');
+      const count = raw.split('\n').filter(l => l && !l.startsWith('#')).length;
+      console.log(`🍪 Cookies loaded from R2 (_config/cookies.txt): ${count} entries`);
+      cookiesReady = true;
+      return;
+    }
+  } catch(e) {
+    if (e.name !== 'NoSuchKey') console.warn('⚠️ Could not load cookies from R2:', e.message);
+  }
+
+  // Fallback: env var (BROWSER_COOKIES or legacy YOUTUBE_COOKIES)
+  const cookieData = process.env.BROWSER_COOKIES || process.env.YOUTUBE_COOKIES;
   if (cookieData && cookieData.trim()) {
     try {
-      // Step 1: Normalise line endings (Windows CRLF → LF) and strip stray \r
       const normalised = cookieData.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      // Step 2: Fix tabs — Railway may convert tabs to spaces; restore them
       const fixed = normalised.trim().split('\n').map(line => {
-        const trimmed = line.trimEnd(); // remove trailing whitespace / \r remnants
+        const trimmed = line.trimEnd();
         if (trimmed.startsWith('#') || trimmed.trim() === '') return trimmed;
-        // If no tabs present, convert multi-space columns back to tab-separated
         if (!trimmed.includes('\t')) {
           return trimmed.replace(
             /^(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(TRUE|FALSE)\s+(\S+)\s+(\S+)\s+(.+)$/,
@@ -47,13 +70,19 @@ function getYtCookiesFlag() {
         return trimmed;
       }).join('\n');
       fs.writeFileSync(COOKIES_PATH, fixed + '\n', 'utf8');
-      console.log(`🍪 Cookies written: ${fixed.split('\n').filter(l => l && !l.startsWith('#')).length} entries`);
-      return `--cookies "${COOKIES_PATH}"`;
+      const count = fixed.split('\n').filter(l => l && !l.startsWith('#')).length;
+      console.log(`🍪 Cookies loaded from env var: ${count} entries`);
+      cookiesReady = true;
     } catch(e) {
-      console.warn('⚠️ Failed to write YouTube cookies:', e.message);
+      console.warn('⚠️ Failed to write cookies from env var:', e.message);
     }
+  } else {
+    console.log('ℹ️ No cookies configured — restricted videos will be skipped');
   }
-  return '';
+}
+
+function getCookiesFlag() {
+  return cookiesReady ? `--cookies "${COOKIES_PATH}"` : '';
 }
 
 async function downloadFile(url, dest, hops = 0) {
@@ -548,16 +577,15 @@ app.post('/download-youtube-to-r2', async (req, res) => {
   const cleanup = () => [inp, trimmed, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
-    const cookiesFlag = getYtCookiesFlag();
-    // yt-dlp 2026 requires explicit JS runtime (changed default to Deno, not Node.js)
-    // Tell it to use the same Node.js binary that's running this server
+    const cookiesFlag = getCookiesFlag();
     const jsRuntime = `--js-runtimes "node:${process.execPath}"`;
-    // web client required for authenticated + age-restricted content (supports cookies)
-    // web_creator as fallback also handles age-restricted via creator session
-    // No-cookies path: android+ios fastest, no n-challenge needed
-    const extractorArgs = cookiesFlag
-      ? '--extractor-args "youtube:player_client=web,web_creator"'
-      : '--extractor-args "youtube:player_client=android,ios"';
+    // Detect platform — YouTube needs specific player_client args; other sites use auto-detection
+    const isYouTube = /youtube\.com|youtu\.be/.test(youtubeUrl);
+    const extractorArgs = isYouTube
+      ? (cookiesFlag
+          ? '--extractor-args "youtube:player_client=web,web_creator"'
+          : '--extractor-args "youtube:player_client=android,ios"')
+      : ''; // Instagram, TikTok, Dailymotion etc — let yt-dlp auto-detect
 
     let rawTitle = '';
     try {
@@ -594,12 +622,13 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    // If cookie-based download got a "Sign in" error, retry WITHOUT cookies using android,ios.
-    // Bad/expired cookies cause Sign-in errors even on non-age-restricted videos.
-    // If android,ios also fails → video is genuinely age-restricted → skip.
+    // If cookie-based download failed → retry without cookies
+    // For YouTube: use android,ios clients (no n-challenge, no cookies needed)
+    // For Instagram/other: cookies are the only option — if they fail, video is restricted → skip
     if (ytErr && cookiesFlag) {
       const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
-      if (msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('confirm your age') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden')) {
+      const isRestricted = msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('confirm your age') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden') || msg1.includes('inappropriate') || msg1.includes('unavailable for certain audiences') || msg1.includes('Login required') || msg1.includes('Private video');
+      if (isRestricted && isYouTube) {
         console.warn('⚠️ [YT] Cookie path failed — retrying without cookies (android,ios)...');
         try {
           await execAsync(
@@ -618,8 +647,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const msg = (ytErr.message || '') + (ytErr.stderr || '');
       console.error('❌ [YT] yt-dlp error:', msg.slice(0, 800));
       if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
-      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age') || msg.includes('403') || msg.includes('Forbidden')) {
-        console.log(`⏭️ [YT] Skipping — blocked/age-restricted: ${youtubeUrl}`);
+      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age') || msg.includes('403') || msg.includes('Forbidden') || msg.includes('inappropriate') || msg.includes('unavailable for certain audiences') || msg.includes('Login required') || msg.includes('Private video')) {
+        console.log(`⏭️ Skipping — restricted/blocked: ${youtubeUrl}`);
         cleanup();
         return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
@@ -695,9 +724,32 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.7.0', maxBuffer: '200MB' }));
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.7.0 (unique filenames + 403 skip)`);
+// Endpoint to upload new cookies.txt directly to R2 (no redeploy needed)
+// POST /upload-cookies with body: { cookiesText: "...full cookies.txt content..." }
+app.post('/upload-cookies', async (req, res) => {
+  const { cookiesText } = req.body;
+  if (!cookiesText || !cookiesText.trim()) return res.status(400).json({ error: 'cookiesText required' });
+  try {
+    const { PutObjectCommand } = require('@aws-sdk/client-s3');
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: COOKIES_R2_KEY,
+      Body: cookiesText,
+      ContentType: 'text/plain'
+    }));
+    // Reload into memory immediately
+    await loadCookiesFromR2();
+    res.json({ success: true, message: 'Cookies uploaded to R2 and reloaded' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.0.0', maxBuffer: '200MB', cookiesReady }));
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT} — v3.0.0 (cookies from R2 — no size limit)`);
+  // Load cookies from R2 (or env var fallback) before accepting requests
+  await loadCookiesFromR2();
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
