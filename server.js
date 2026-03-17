@@ -569,8 +569,9 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       rawTitle = (titleOut || '').trim();
     } catch(e) { /* title fetch failed silently */ }
 
-    const safeName = videoName ||
-      (rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 80) + '.mp4');
+    // Always include timestamp in filename → guarantees unique R2 key even when titles are identical
+    const baseTitle = rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 60);
+    const safeName = videoName || `${baseTitle}_${ts}.mp4`;
 
     console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
     // Retry once on 429 (rate-limit) after a short wait
@@ -694,9 +695,9 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.6.0', maxBuffer: '200MB' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.7.0', maxBuffer: '200MB' }));
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — v2.6.0 (fallback + 403 skip)`);
+  console.log(`Server running on port ${PORT} — v2.7.0 (unique filenames + 403 skip)`);
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
