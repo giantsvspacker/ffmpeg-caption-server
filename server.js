@@ -591,6 +591,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
     let rawTitle = '';
     const isInstagram = /instagram\.com/.test(youtubeUrl);
+    const isTwitter   = /twitter\.com|x\.com/.test(youtubeUrl);
     try {
       // Fetch title AND description in one call — separated by |||
       const { stdout: titleOut } = await execAsync(
@@ -602,11 +603,14 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const ytTitle = (parts[0] || '').trim();
       const ytDesc  = (parts[1] || '').trim();
 
-      // For Instagram: yt-dlp title is always "Video by username" — use caption (description) instead
+      // Instagram: title is always "Video by username" — use caption instead
       const isGenericInstagramTitle = isInstagram && /^Video by /i.test(ytTitle);
-      if (isGenericInstagramTitle && ytDesc) {
-        rawTitle = ytDesc; // use the actual post caption
-        console.log(`📝 [IG] Using caption as title: "${rawTitle.slice(0, 80)}"`);
+      // Twitter/X: title is always "@username" style — use tweet text instead
+      const isGenericTwitterTitle   = isTwitter && ytDesc && ytDesc.length > 5;
+
+      if ((isGenericInstagramTitle || isGenericTwitterTitle) && ytDesc) {
+        rawTitle = ytDesc.slice(0, 200); // use actual post caption / tweet text
+        console.log(`📝 [${isInstagram ? 'IG' : 'X'}] Using caption as title: "${rawTitle.slice(0, 80)}"`);
       } else {
         rawTitle = ytTitle;
       }
@@ -791,7 +795,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.4.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.5.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
@@ -816,7 +820,7 @@ app.get('/r2-proxy', async (req, res) => {
   }
 });
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT} — v3.0.0 (cookies from R2 — no size limit)`);
+  console.log(`Server running on port ${PORT} — v3.5.0 (IG+Twitter caption + maxDuration + skip)`);
   // Load cookies from R2 (or env var fallback) before accepting requests
   await loadCookiesFromR2();
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
