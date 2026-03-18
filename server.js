@@ -1,4 +1,21 @@
-const ffmpegPath = require('ffmpeg-static');
+const ffmpegStatic = require('ffmpeg-static');
+// Prefer system ffmpeg (installed via nixpacks) because it includes drawtext/libfreetype.
+// Fall back to ffmpeg-static if system ffmpeg is not found.
+const { execSync } = require('child_process');
+let ffmpegPath = ffmpegStatic;
+let ffmpegHasDrawtext = false;
+try {
+  const sysFfmpeg = execSync('which ffmpeg 2>/dev/null || true', { timeout: 3000 }).toString().trim();
+  if (sysFfmpeg) {
+    const filters = execSync(`${sysFfmpeg} -filters 2>&1 | grep drawtext || true`, { timeout: 5000 }).toString();
+    if (filters.includes('drawtext')) {
+      ffmpegPath = sysFfmpeg;
+      ffmpegHasDrawtext = true;
+      console.log(`✅ Using system ffmpeg with drawtext: ${sysFfmpeg}`);
+    }
+  }
+} catch(e) { /* stay with ffmpeg-static */ }
+if (!ffmpegHasDrawtext) console.log(`ℹ️ ffmpeg-static in use — drawtext not available (add nixpacks.toml to enable)`);
 const express = require('express');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -800,12 +817,14 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     }
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
-    // Optional watermark: drawtext at bottom-center (e.g. "TollyClicks")
-    const wmSafe = watermarkText ? watermarkText.replace(/[':]/g, '') : '';
-    const wmFilter = wmSafe
-      ? `,drawtext=text='${wmSafe}':fontcolor=white:fontsize=80:x=(w-text_w)/2:y=h-text_h-120:box=1:boxcolor=black@0.55:boxborderw=22`
+    // Optional watermark via drawtext (requires system ffmpeg with libfreetype)
+    const wmSafe = watermarkText ? watermarkText.replace(/[^A-Za-z0-9 _\-]/g, '') : '';
+    const baseVf = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
+    const wmFilter = (wmSafe && ffmpegHasDrawtext)
+      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=${wmSafe}:fontcolor=white:fontsize=80:x=(w-text_w)/2:y=h-text_h-120:box=1:boxcolor=0x00000099:boxborderw=22`
       : '';
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}${wmFilter}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — system ffmpeg with drawtext not available');
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${baseVf}${wmFilter}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
@@ -856,7 +875,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.8.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.9.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
