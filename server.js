@@ -638,7 +638,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     const safeName = videoName || `${baseTitle}_${ts}.mp4`;
 
     console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
-    // Retry once on 429 (rate-limit) after a short wait
+    // Attempt 1: Primary download (with cookies if available)
     let ytErr;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -659,79 +659,111 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    // If cookie-based download failed → retry without cookies
-    // For YouTube: use android,ios clients (no n-challenge, no cookies needed)
-    // For Instagram/other: cookies are the only option — if they fail, video is restricted → skip
-    if (ytErr && cookiesFlag) {
-      const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
-      const isRestricted = msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('confirm your age') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden') || msg1.includes('inappropriate') || msg1.includes('unavailable for certain audiences') || msg1.includes('Login required') || msg1.includes('Private video');
-      if (isRestricted && isYouTube) {
-        console.warn('⚠️ [YT] Cookie path failed — retrying without cookies (android,ios)...');
+    // For YouTube: try ALL fallback clients on ANY failure (IP blocks, bot detection, etc.)
+    // This runs regardless of whether cookies are loaded — server IP may be blocked even with cookies
+    if (ytErr && isYouTube) {
+      // Attempt 2: android + ios (no bot challenge, bypasses web player restrictions)
+      console.warn('⚠️ [YT] Primary failed — retrying with android,ios clients...');
+      try {
+        await execAsync(
+          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+          `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+          `${jsRuntime} --extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
+          { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+        );
+        console.log('✅ [YT] Fallback android/ios succeeded');
+        ytErr = null;
+      } catch (e2) {
+        ytErr = e2;
+        // Attempt 3: mweb (mobile web — different bot detection path)
+        console.warn('⚠️ [YT] android/ios failed — retrying with mweb client...');
         try {
           await execAsync(
             `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-            `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
-            `${jsRuntime} --extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
+            `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
+            `${jsRuntime} --extractor-args "youtube:player_client=mweb" -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
-          console.log('✅ [YT] Fallback android/ios succeeded');
+          console.log('✅ [YT] Fallback mweb succeeded');
           ytErr = null;
-        } catch (e2) {
-          ytErr = e2;
-          // 3rd attempt: mweb client (mobile web — different bot detection path)
-          console.warn('⚠️ [YT] android/ios failed — retrying with mweb client...');
+        } catch (e3) {
+          ytErr = e3;
+          // Attempt 4: tv_embedded (YouTube TV — no bot challenge, no auth)
+          console.warn('⚠️ [YT] mweb failed — retrying with tv_embedded...');
           try {
             await execAsync(
-              `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-              `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
-              `${jsRuntime} --extractor-args "youtube:player_client=mweb" -o "${inp}" "${youtubeUrl}"`,
+              `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "best[ext=mp4]/best" ` +
+              `--no-playlist --merge-output-format mp4 ` +
+              `--extractor-args "youtube:player_client=tv_embedded" -o "${inp}" "${youtubeUrl}"`,
               { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
             );
-            console.log('✅ [YT] Fallback mweb succeeded');
+            console.log('✅ [YT] Fallback tv_embedded succeeded');
             ytErr = null;
-          } catch (e3) {
-            ytErr = e3;
-            // 4th attempt: tv_embedded — YouTube TV embed, no bot challenge, no auth needed
-            console.warn('⚠️ [YT] mweb failed — retrying with tv_embedded...');
+          } catch (e4) {
+            ytErr = e4;
+            // Attempt 5: cobalt.tools API — completely different infrastructure, bypasses Railway IP block
+            console.warn('⚠️ [YT] All yt-dlp clients failed — trying cobalt.tools API...');
             try {
-              await execAsync(
-                `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "best[ext=mp4]/best" ` +
-                `--no-playlist --merge-output-format mp4 ` +
-                `--extractor-args "youtube:player_client=tv_embedded" -o "${inp}" "${youtubeUrl}"`,
-                { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
-              );
-              console.log('✅ [YT] Fallback tv_embedded succeeded');
-              ytErr = null;
-            } catch (e4) {
-              ytErr = e4;
-              // 5th attempt: cobalt.tools API — completely different infrastructure, bypasses Railway IP block
-              console.warn('⚠️ [YT] All yt-dlp clients failed — trying cobalt.tools API...');
-              try {
-                const cobaltRes = await fetch('https://api.cobalt.tools/', {
+              // Use built-in https module (works on all Node versions, unlike fetch)
+              const cobaltData = await new Promise((resolve, reject) => {
+                const body = JSON.stringify({ url: youtubeUrl, videoQuality: '1080', filenameStyle: 'basic' });
+                const cobReq = https.request({
+                  hostname: 'api.cobalt.tools',
+                  path: '/',
                   method: 'POST',
-                  headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url: youtubeUrl, videoQuality: '1080', filenameStyle: 'basic' }),
-                  signal: AbortSignal.timeout(30000)
+                  headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (compatible; video-downloader/1.0)',
+                    'Content-Length': Buffer.byteLength(body)
+                  },
+                  timeout: 30000
+                }, (cobRes) => {
+                  let data = '';
+                  cobRes.on('data', chunk => data += chunk);
+                  cobRes.on('end', () => {
+                    try { resolve(JSON.parse(data)); }
+                    catch(parseErr) { reject(new Error('cobalt JSON parse failed: ' + data.slice(0, 200))); }
+                  });
                 });
-                const cobaltData = await cobaltRes.json();
-                const cobaltUrl = cobaltData.url;
-                if (cobaltUrl) {
-                  console.log(`🌐 [YT] cobalt.tools URL: ${cobaltUrl.slice(0, 80)}`);
-                  await execAsync(
-                    `curl -L --max-time 300 -o "${inp}" "${cobaltUrl}"`,
-                    { timeout: 360000, maxBuffer: MAX_BUFFER }
-                  );
-                  console.log('✅ [YT] cobalt.tools download succeeded');
-                  ytErr = null;
-                } else {
-                  console.warn('⚠️ [YT] cobalt.tools returned no URL:', JSON.stringify(cobaltData).slice(0, 200));
-                }
-              } catch (e5) {
-                console.warn('⚠️ [YT] cobalt.tools failed:', e5.message);
+                cobReq.on('error', reject);
+                cobReq.on('timeout', () => { cobReq.destroy(); reject(new Error('cobalt request timed out')); });
+                cobReq.write(body);
+                cobReq.end();
+              });
+              console.log(`🌐 [YT] cobalt.tools response: ${JSON.stringify(cobaltData).slice(0, 300)}`);
+              const cobaltUrl = cobaltData.url;
+              if (cobaltUrl) {
+                console.log(`🌐 [YT] cobalt.tools URL obtained — downloading...`);
+                await execAsync(
+                  `curl -L --max-time 300 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o "${inp}" "${cobaltUrl}"`,
+                  { timeout: 360000, maxBuffer: MAX_BUFFER }
+                );
+                // Verify file was actually downloaded (not empty/error page)
+                const fileSize = fs.existsSync(inp) ? fs.statSync(inp).size : 0;
+                if (fileSize < 10000) throw new Error(`cobalt download produced tiny file: ${fileSize} bytes`);
+                console.log('✅ [YT] cobalt.tools download succeeded');
+                ytErr = null;
+              } else {
+                throw new Error('cobalt.tools returned no URL: ' + JSON.stringify(cobaltData).slice(0, 200));
               }
+            } catch (e5) {
+              console.warn('⚠️ [YT] cobalt.tools failed:', e5.message);
+              // ytErr stays as e4 (last yt-dlp error)
             }
           }
         }
+      }
+    }
+
+    // For non-YouTube (Instagram, TikTok, etc.) with cookies: if cookies failed, it's genuinely restricted
+    if (ytErr && !isYouTube && cookiesFlag) {
+      const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
+      const isRestricted = msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden') || msg1.includes('Login required') || msg1.includes('Private');
+      if (isRestricted) {
+        console.log(`⏭️ [non-YT] Cookie auth failed — video restricted: ${youtubeUrl}`);
+        cleanup();
+        return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
     }
 
@@ -875,7 +907,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.9.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.10.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
@@ -900,7 +932,7 @@ app.get('/r2-proxy', async (req, res) => {
   }
 });
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT} — v3.5.0 (IG+Twitter caption + maxDuration + skip)`);
+  console.log(`Server running on port ${PORT} — v3.10.0 (full YT fallback chain + watermark + maxDuration + captions)`);
   // Load cookies from R2 (or env var fallback) before accepting requests
   await loadCookiesFromR2();
   // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
