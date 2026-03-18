@@ -627,7 +627,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       try {
         await execAsync(
           `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-          `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+          `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
+          `--concurrent-fragments 1 ` +
           `${jsRuntime} ${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
         );
@@ -656,9 +657,37 @@ app.post('/download-youtube-to-r2', async (req, res) => {
             `${jsRuntime} --extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
-          console.log('✅ [YT] Fallback (no-cookies) succeeded');
+          console.log('✅ [YT] Fallback android/ios succeeded');
           ytErr = null;
-        } catch (e2) { ytErr = e2; }
+        } catch (e2) {
+          ytErr = e2;
+          // 3rd attempt: mweb client (mobile web — different bot detection path)
+          console.warn('⚠️ [YT] android/ios failed — retrying with mweb client...');
+          try {
+            await execAsync(
+              `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+              `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
+              `${jsRuntime} --extractor-args "youtube:player_client=mweb" -o "${inp}" "${youtubeUrl}"`,
+              { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+            );
+            console.log('✅ [YT] Fallback mweb succeeded');
+            ytErr = null;
+          } catch (e3) {
+            ytErr = e3;
+            // 4th attempt: tv_embedded — YouTube TV embed, no bot challenge, no auth needed
+            console.warn('⚠️ [YT] mweb failed — retrying with tv_embedded...');
+            try {
+              await execAsync(
+                `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "best[ext=mp4]/best" ` +
+                `--no-playlist --merge-output-format mp4 ` +
+                `--extractor-args "youtube:player_client=tv_embedded" -o "${inp}" "${youtubeUrl}"`,
+                { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+              );
+              console.log('✅ [YT] Fallback tv_embedded succeeded');
+              ytErr = null;
+            } catch (e4) { ytErr = e4; }
+          }
+        }
       }
     }
 
@@ -795,7 +824,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.5.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.6.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
