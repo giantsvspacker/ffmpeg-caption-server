@@ -540,7 +540,7 @@ app.post('/scale-video', async (req, res) => {
     await downloadFile(videoUrl, inp);
 
     console.log(`▶ [Scale] Upscaling to ${w}x${h}...`);
-    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 600000, maxBuffer: MAX_BUFFER });
 
     const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
@@ -654,6 +654,12 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         cleanup();
         return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
+      // No video in tweet / post — skip cleanly instead of crashing
+      if (msg.includes('No video could be found') || msg.includes('No media could be found') || msg.includes('Unable to download video') || msg.includes('This tweet is not available') || msg.includes('No streams found') || msg.includes('There\'s no video in this tweet')) {
+        console.log(`⏭️ Skipping — no video found: ${youtubeUrl}`);
+        cleanup();
+        return res.json({ skipped: true, reason: 'no_video', youtubeUrl });
+      }
       throw ytErr;
     }
 
@@ -721,7 +727,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     }
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
@@ -772,7 +778,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.2.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.3.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
