@@ -590,13 +590,26 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       : ''; // Instagram, TikTok, Dailymotion etc — let yt-dlp auto-detect
 
     let rawTitle = '';
+    const isInstagram = /instagram\.com/.test(youtubeUrl);
     try {
+      // Fetch title AND description in one call — separated by |||
       const { stdout: titleOut } = await execAsync(
-        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist ` +
+        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s|||%(description)s" --no-playlist ` +
         `${jsRuntime} ${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
         { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
       );
-      rawTitle = (titleOut || '').trim();
+      const parts = (titleOut || '').split('|||');
+      const ytTitle = (parts[0] || '').trim();
+      const ytDesc  = (parts[1] || '').trim();
+
+      // For Instagram: yt-dlp title is always "Video by username" — use caption (description) instead
+      const isGenericInstagramTitle = isInstagram && /^Video by /i.test(ytTitle);
+      if (isGenericInstagramTitle && ytDesc) {
+        rawTitle = ytDesc; // use the actual post caption
+        console.log(`📝 [IG] Using caption as title: "${rawTitle.slice(0, 80)}"`);
+      } else {
+        rawTitle = ytTitle;
+      }
     } catch(e) { /* title fetch failed silently */ }
 
     // Always include timestamp in filename → guarantees unique R2 key even when titles are identical
@@ -778,7 +791,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.3.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.4.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
