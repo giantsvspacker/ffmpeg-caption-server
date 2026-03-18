@@ -1,4 +1,4 @@
 [
 phases.setup
 ]
-nixPkgs = ["ffmpeg", "nodejs_20"]
+aptPkgs = ["ffmpeg", "fonts-dejavu-core"]
