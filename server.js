@@ -685,7 +685,34 @@ app.post('/download-youtube-to-r2', async (req, res) => {
               );
               console.log('✅ [YT] Fallback tv_embedded succeeded');
               ytErr = null;
-            } catch (e4) { ytErr = e4; }
+            } catch (e4) {
+              ytErr = e4;
+              // 5th attempt: cobalt.tools API — completely different infrastructure, bypasses Railway IP block
+              console.warn('⚠️ [YT] All yt-dlp clients failed — trying cobalt.tools API...');
+              try {
+                const cobaltRes = await fetch('https://api.cobalt.tools/', {
+                  method: 'POST',
+                  headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ url: youtubeUrl, videoQuality: '1080', filenameStyle: 'basic' }),
+                  signal: AbortSignal.timeout(30000)
+                });
+                const cobaltData = await cobaltRes.json();
+                const cobaltUrl = cobaltData.url;
+                if (cobaltUrl) {
+                  console.log(`🌐 [YT] cobalt.tools URL: ${cobaltUrl.slice(0, 80)}`);
+                  await execAsync(
+                    `curl -L --max-time 300 -o "${inp}" "${cobaltUrl}"`,
+                    { timeout: 360000, maxBuffer: MAX_BUFFER }
+                  );
+                  console.log('✅ [YT] cobalt.tools download succeeded');
+                  ytErr = null;
+                } else {
+                  console.warn('⚠️ [YT] cobalt.tools returned no URL:', JSON.stringify(cobaltData).slice(0, 200));
+                }
+              } catch (e5) {
+                console.warn('⚠️ [YT] cobalt.tools failed:', e5.message);
+              }
+            }
           }
         }
       }
@@ -824,7 +851,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.6.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.7.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
