@@ -565,7 +565,7 @@ app.post('/scale-video', async (req, res) => {
 });
 
 app.post('/download-youtube-to-r2', async (req, res) => {
-  const { youtubeUrl, folder, videoName, width, height, maxDuration } = req.body;
+  const { youtubeUrl, folder, videoName, width, height, maxDuration, watermarkText } = req.body;
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
 
   const w = parseInt(width)  || 2160;
@@ -800,7 +800,12 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     }
 
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    // Optional watermark: drawtext at bottom-center (e.g. "TollyClicks")
+    const wmSafe = watermarkText ? watermarkText.replace(/[':]/g, '') : '';
+    const wmFilter = wmSafe
+      ? `,drawtext=text='${wmSafe}':fontcolor=white:fontsize=80:x=(w-text_w)/2:y=h-text_h-120:box=1:boxcolor=black@0.55:boxborderw=22`
+      : '';
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}${wmFilter}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
@@ -851,7 +856,7 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.7.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.8.0', maxBuffer: '200MB', cookiesReady }));
 
 // CORS proxy — streams an R2 video to the browser with permissive CORS headers
 // Usage: GET /r2-proxy?key=War-Videos/filename.mp4
