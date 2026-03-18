@@ -565,16 +565,18 @@ app.post('/scale-video', async (req, res) => {
 });
 
 app.post('/download-youtube-to-r2', async (req, res) => {
-  const { youtubeUrl, folder, videoName, width, height } = req.body;
+  const { youtubeUrl, folder, videoName, width, height, maxDuration } = req.body;
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
 
   const w = parseInt(width)  || 2160;
   const h = parseInt(height) || 3840;
+  const maxDurSec = maxDuration ? parseInt(maxDuration) : 0; // 0 = no limit
   const ts  = Date.now();
   const inp = `/tmp/yt_in_${ts}.mp4`;
   const trimmed = `/tmp/yt_trim_${ts}.mp4`;
+  const maxcut  = `/tmp/yt_maxcut_${ts}.mp4`;
   const out = `/tmp/yt_out_${ts}.mp4`;
-  const cleanup = () => [inp, trimmed, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+  const cleanup = () => [inp, trimmed, maxcut, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
     const cookiesFlag = getCookiesFlag();
@@ -693,6 +695,31 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       console.warn('⚠️ [YT] Freeze detection skipped:', e.message);
     }
 
+    // Trim to maxDuration if set and video is longer (e.g. maxDuration=180 for 3-min cap)
+    if (maxDurSec > 0) {
+      try {
+        let curDur = 0;
+        try {
+          await execAsync(`${ffmpegPath} -i "${sourceForScale}"`, { timeout: 15000, maxBuffer: MAX_BUFFER });
+        } catch(e) {
+          const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+          if (m) curDur = +m[1]*3600 + +m[2]*60 + parseFloat(m[3]);
+        }
+        if (curDur > maxDurSec) {
+          console.log(`✂️ [YT] Cutting to ${maxDurSec}s (was ${curDur.toFixed(1)}s)...`);
+          await execAsync(
+            `${ffmpegPath} -y -i "${sourceForScale}" -t ${maxDurSec} -c copy "${maxcut}"`,
+            { timeout: 120000, maxBuffer: MAX_BUFFER }
+          );
+          sourceForScale = maxcut;
+        } else {
+          console.log(`✅ [YT] Duration ${curDur.toFixed(1)}s ≤ maxDuration ${maxDurSec}s — no cut needed`);
+        }
+      } catch(e) {
+        console.warn('⚠️ [YT] maxDuration trim skipped:', e.message);
+      }
+    }
+
     console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
     const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}" -c:v libx264 -preset veryfast -crf 20 -c:a copy -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
@@ -745,7 +772,30 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.0.0', maxBuffer: '200MB', cookiesReady }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.2.0', maxBuffer: '200MB', cookiesReady }));
+
+// CORS proxy — streams an R2 video to the browser with permissive CORS headers
+// Usage: GET /r2-proxy?key=War-Videos/filename.mp4
+app.options('/r2-proxy', (req, res) => {
+  res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET', 'Access-Control-Allow-Headers': '*' });
+  res.sendStatus(204);
+});
+app.get('/r2-proxy', async (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'Missing key param' });
+  try {
+    const data = await s3.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    res.set({
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': 'video/mp4',
+      'Content-Disposition': 'inline',
+    });
+    data.Body.pipe(res);
+  } catch (e) {
+    console.error('r2-proxy error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT} — v3.0.0 (cookies from R2 — no size limit)`);
   // Load cookies from R2 (or env var fallback) before accepting requests
