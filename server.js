@@ -797,14 +797,15 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
     const wmSafe = watermarkText ? watermarkText.replace(/[^A-Za-z0-9 _\-]/g, '') : '';
 
-    // ✅ Step 1: Delogo — erase existing channel watermarks at all 4 corners BEFORE scaling
+    // ✅ Step 1: drawbox — cover existing channel watermarks at all 4 corners BEFORE scaling
+    // Uses drawbox (supports iw/ih expressions unlike delogo)
     // Targets "Binodon Chitro" (bottom-right) and other common logo positions
     const delogoFilter = removeWatermark
       ? [
-          `delogo=x=iw*0.6:y=ih*0.82:w=iw*0.4:h=ih*0.18`,   // bottom-right (Binodon Chitro, etc.)
-          `delogo=x=0:y=ih*0.82:w=iw*0.4:h=ih*0.18`,          // bottom-left
-          `delogo=x=iw*0.7:y=0:w=iw*0.3:h=ih*0.1`,            // top-right
-          `delogo=x=0:y=0:w=iw*0.3:h=ih*0.1`,                 // top-left
+          `drawbox=x=iw*0.6:y=ih*0.82:w=iw*0.4:h=ih*0.18:color=black:t=fill`,   // bottom-right
+          `drawbox=x=0:y=ih*0.82:w=iw*0.4:h=ih*0.18:color=black:t=fill`,          // bottom-left
+          `drawbox=x=iw*0.7:y=0:w=iw*0.3:h=ih*0.1:color=black:t=fill`,            // top-right
+          `drawbox=x=0:y=0:w=iw*0.3:h=ih*0.1:color=black:t=fill`,                 // top-left
         ].join(',') + ','
       : '';
 
