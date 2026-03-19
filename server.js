@@ -441,38 +441,23 @@ app.post('/pick-novaziri-image', async (req, res) => {
       Bucket: process.env.R2_BUCKET,
       Prefix: 'NovaZiri Photo/',
     }));
-
     const objects = (listResult.Contents || []).filter(obj => !obj.Key.endsWith('/'));
-
     if (objects.length === 0) {
       return res.status(404).json({ error: 'No NovaZiri images available. Please upload more photos to the NovaZiri Photo folder.' });
     }
-
     const picked = objects[Math.floor(Math.random() * objects.length)];
-
-    const getResult = await s3.send(new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: picked.Key,
-    }));
-
+    const getResult = await s3.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: picked.Key }));
     const chunks = [];
     for await (const chunk of getResult.Body) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     const imageBuffer = Buffer.concat(chunks);
-
-    await s3.send(new DeleteObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: picked.Key,
-    }));
-
+    await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: picked.Key }));
     console.log(`🖼️ [NovaZiri] Picked & deleted: ${picked.Key} | ${objects.length - 1} remaining`);
-
     const ext = picked.Key.split('.').pop().toLowerCase();
     const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
     res.setHeader('Content-Type', mimeTypes[ext] || 'image/png');
     res.send(imageBuffer);
-
   } catch (err) {
     console.error('❌ pick-novaziri-image error:', err.message);
     res.status(500).json({ error: err.message });
@@ -485,38 +470,23 @@ app.post('/pick-lufiaurora-image', async (req, res) => {
       Bucket: process.env.R2_BUCKET,
       Prefix: 'LufiAurora-Photo/',
     }));
-
     const objects = (listResult.Contents || []).filter(obj => !obj.Key.endsWith('/'));
-
     if (objects.length === 0) {
       return res.status(404).json({ error: 'No LufiAurora images available. Please upload more photos to the LufiAurora-Photo folder.' });
     }
-
     const picked = objects[Math.floor(Math.random() * objects.length)];
-
-    const getResult = await s3.send(new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: picked.Key,
-    }));
-
+    const getResult = await s3.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: picked.Key }));
     const chunks = [];
     for await (const chunk of getResult.Body) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     const imageBuffer = Buffer.concat(chunks);
-
-    await s3.send(new DeleteObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: picked.Key,
-    }));
-
+    await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: picked.Key }));
     console.log(`🖼️ [LufiAurora] Picked & deleted: ${picked.Key} | ${objects.length - 1} remaining`);
-
     const ext = picked.Key.split('.').pop().toLowerCase();
     const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
     res.setHeader('Content-Type', mimeTypes[ext] || 'image/png');
     res.send(imageBuffer);
-
   } catch (err) {
     console.error('❌ pick-lufiaurora-image error:', err.message);
     res.status(500).json({ error: err.message });
@@ -555,22 +525,16 @@ app.post('/scale-video', async (req, res) => {
     const h = parseInt(height);
     console.log(`▶ [Scale] Downloading: ${videoUrl}`);
     await downloadFile(videoUrl, inp);
-
     console.log(`▶ [Scale] Upscaling to ${w}x${h}...`);
-    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    const cmd = `${ffmpegPath} -y -i "${inp}" -vf "scale=${w}:${h}:flags=lanczos" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
     await execAsync(cmd, { timeout: 600000, maxBuffer: MAX_BUFFER });
-
     const baseName = videoName.replace(/\.(mov|mp4|avi|mkv|webm|m4v)$/i, '');
-    const safeBaseName = baseName
-      .replace(/[#%?&=+<>|\\/:*"]/g, '')
-      .replace(/\s+/g, '-').replace(/-+/g, '-').trim();
+    const safeBaseName = baseName.replace(/[#%?&=+<>|\\/:*"]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
     const outputFolder = folder || 'scaled';
     const key = `${outputFolder}/${safeBaseName}.mp4`;
-
     console.log(`▶ [Scale] Uploading to R2: ${key}`);
     await uploadToR2(out, key);
     const proxyUrl = `https://${req.get('host')}/proxy-r2?key=${encodeURIComponent(key)}`;
-
     cleanup();
     console.log(`✅ [Scale] Done! ${w}x${h} → ${proxyUrl}`);
     res.json({ success: true, output_url: proxyUrl, key });
@@ -581,13 +545,20 @@ app.post('/scale-video', async (req, res) => {
   }
 });
 
+// ============================================================
+// ✅ UPDATED: /download-youtube-to-r2
+// Changes vs original:
+//   1. Added `removeWatermark` param — erases logos at all 4 corners via delogo filter
+//   2. Fixed watermark text filter chain (delogo → scale → drawtext)
+//   3. Improved encoding quality: crf 20 → crf 18
+// ============================================================
 app.post('/download-youtube-to-r2', async (req, res) => {
-  const { youtubeUrl, folder, videoName, width, height, maxDuration, watermarkText } = req.body;
+  const { youtubeUrl, folder, videoName, width, height, maxDuration, watermarkText, removeWatermark } = req.body;
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
 
   const w = parseInt(width)  || 2160;
   const h = parseInt(height) || 3840;
-  const maxDurSec = maxDuration ? parseInt(maxDuration) : 0; // 0 = no limit
+  const maxDurSec = maxDuration ? parseInt(maxDuration) : 0;
   const ts  = Date.now();
   const inp = `/tmp/yt_in_${ts}.mp4`;
   const trimmed = `/tmp/yt_trim_${ts}.mp4`;
@@ -597,22 +568,18 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
   try {
     const cookiesFlag = getCookiesFlag();
-    // Use PATH-based node lookup (node dir is added to ytDlpEnv.PATH at startup)
-    // Explicit path with nix store hash breaks after nixpacks rebuilds — just use 'node'
     const jsRuntime = '--js-runtimes node';
-    // Detect platform — YouTube needs specific player_client args; other sites use auto-detection
     const isYouTube = /youtube\.com|youtu\.be/.test(youtubeUrl);
     const extractorArgs = isYouTube
       ? (cookiesFlag
           ? '--extractor-args "youtube:player_client=web,web_creator"'
           : '--extractor-args "youtube:player_client=android,ios"')
-      : ''; // Instagram, TikTok, Dailymotion etc — let yt-dlp auto-detect
+      : '';
 
     let rawTitle = '';
     const isInstagram = /instagram\.com/.test(youtubeUrl);
     const isTwitter   = /twitter\.com|x\.com/.test(youtubeUrl);
     try {
-      // Fetch title AND description in one call — separated by |||
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s|||%(description)s" --no-playlist ` +
         `${jsRuntime} ${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
@@ -621,26 +588,20 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const parts = (titleOut || '').split('|||');
       const ytTitle = (parts[0] || '').trim();
       const ytDesc  = (parts[1] || '').trim();
-
-      // Instagram: title is always "Video by username" — use caption instead
       const isGenericInstagramTitle = isInstagram && /^Video by /i.test(ytTitle);
-      // Twitter/X: title is always "@username" style — use tweet text instead
       const isGenericTwitterTitle   = isTwitter && ytDesc && ytDesc.length > 5;
-
       if ((isGenericInstagramTitle || isGenericTwitterTitle) && ytDesc) {
-        rawTitle = ytDesc.slice(0, 200); // use actual post caption / tweet text
+        rawTitle = ytDesc.slice(0, 200);
         console.log(`📝 [${isInstagram ? 'IG' : 'X'}] Using caption as title: "${rawTitle.slice(0, 80)}"`);
       } else {
         rawTitle = ytTitle;
       }
     } catch(e) { /* title fetch failed silently */ }
 
-    // Always include timestamp in filename → guarantees unique R2 key even when titles are identical
     const baseTitle = rawTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 60);
     const safeName = videoName || `${baseTitle}_${ts}.mp4`;
 
     console.log(`▶ [YT] Downloading: ${rawTitle || youtubeUrl}`);
-    // Attempt 1: Primary download (with cookies if available)
     let ytErr;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -661,10 +622,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    // For YouTube: try ALL fallback clients on ANY failure (IP blocks, bot detection, etc.)
-    // This runs regardless of whether cookies are loaded — server IP may be blocked even with cookies
     if (ytErr && isYouTube) {
-      // Attempt 2: android + ios (no bot challenge, bypasses web player restrictions)
       console.warn('⚠️ [YT] Primary failed — retrying with android,ios clients...');
       try {
         await execAsync(
@@ -677,7 +635,6 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         ytErr = null;
       } catch (e2) {
         ytErr = e2;
-        // Attempt 3: mweb (mobile web — different bot detection path)
         console.warn('⚠️ [YT] android/ios failed — retrying with mweb client...');
         try {
           await execAsync(
@@ -690,14 +647,10 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           ytErr = null;
         } catch (e3) {
           ytErr = e3;
-          // Attempt 4: Invidious proxy — routes download through an Invidious server (different IP, bypasses Railway block)
-          // cobalt.tools removed: now requires paid JWT auth (error.api.auth.jwt.missing)
-          // tv_embedded removed: no longer a supported yt-dlp client
           console.warn('⚠️ [YT] mweb failed — trying Invidious proxy fallback...');
           const vidIdMatch = youtubeUrl.match(/(?:shorts\/|v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
           if (vidIdMatch) {
             const vidId = vidIdMatch[1];
-            // Public Invidious instances — try each until one works
             const invInstances = [
               'iv.datura.network',
               'invidious.privacydev.net',
@@ -710,7 +663,6 @@ app.post('/download-youtube-to-r2', async (req, res) => {
               if (invDone) break;
               try {
                 console.log(`🔵 [YT] Trying Invidious: ${inst}`);
-                // Step 1: Get video formats via Invidious API
                 const invInfo = await new Promise((resolve, reject) => {
                   const r = https.request({
                     hostname: inst,
@@ -727,20 +679,17 @@ app.post('/download-youtube-to-r2', async (req, res) => {
                   r.on('timeout', () => { r.destroy(); reject(new Error('timeout')); });
                   r.end();
                 });
-                // Step 2: Pick best muxed mp4 from formatStreams (has both video+audio)
                 const mp4Streams = (invInfo.formatStreams || [])
                   .filter(f => (f.container || '').includes('mp4') || (f.type || '').includes('video/mp4'))
                   .sort((a, b) => parseInt(b.resolution || 0) - parseInt(a.resolution || 0));
                 const best = mp4Streams[0];
                 if (!best || !best.itag) throw new Error(`No mp4 format in response (got ${(invInfo.formatStreams||[]).length} streams)`);
-                // Step 3: Use Invidious local proxy URL — routes through their server so Railway IP doesn't matter
                 const proxyUrl = `https://${inst}/latest_version?id=${vidId}&itag=${best.itag}&local=true`;
                 console.log(`🔵 [YT] Invidious proxy: itag=${best.itag} res=${best.resolution || '?'} via ${inst}`);
                 await execAsync(
                   `curl -L --max-time 300 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o "${inp}" "${proxyUrl}"`,
                   { timeout: 360000, maxBuffer: MAX_BUFFER }
                 );
-                // Verify download is a real video file (not an error page)
                 const fileSize = fs.existsSync(inp) ? fs.statSync(inp).size : 0;
                 if (fileSize < 50000) throw new Error(`file too small (${fileSize} bytes) — likely an error page`);
                 console.log(`✅ [YT] Invidious proxy succeeded (${(fileSize/1024/1024).toFixed(1)} MB via ${inst})`);
@@ -757,7 +706,6 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    // For non-YouTube (Instagram, TikTok, etc.) with cookies: if cookies failed, it's genuinely restricted
     if (ytErr && !isYouTube && cookiesFlag) {
       const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
       const isRestricted = msg1.includes('Sign in') || msg1.includes('age-restricted') || msg1.includes('Only images') || msg1.includes('403') || msg1.includes('Forbidden') || msg1.includes('Login required') || msg1.includes('Private');
@@ -777,7 +725,6 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         cleanup();
         return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
-      // No video in tweet / post — skip cleanly instead of crashing
       if (msg.includes('No video could be found') || msg.includes('No media could be found') || msg.includes('Unable to download video') || msg.includes('This tweet is not available') || msg.includes('No streams found') || msg.includes('There\'s no video in this tweet')) {
         console.log(`⏭️ Skipping — no video found: ${youtubeUrl}`);
         cleanup();
@@ -805,9 +752,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           );
           freezeOut = r.stderr || '';
         } catch(e) { freezeOut = e.stderr || ''; }
-
         const freezeStarts = [...freezeOut.matchAll(/freeze_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
-        // Only trim if the freeze starts in the last 40% of the video
         const trimAt = freezeStarts.find(t => t > totalDuration * 0.60);
         if (trimAt && trimAt > 3) {
           console.log(`✂️ [YT] Freeze-frame ending at ${trimAt.toFixed(2)}s / ${totalDuration.toFixed(2)}s — trimming`);
@@ -824,7 +769,6 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       console.warn('⚠️ [YT] Freeze detection skipped:', e.message);
     }
 
-    // Trim to maxDuration if set and video is longer (e.g. maxDuration=180 for 3-min cap)
     if (maxDurSec > 0) {
       try {
         let curDur = 0;
@@ -849,15 +793,33 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    console.log(`▶ [YT] Scaling to ${w}x${h} (9:16 crop)...`);
-    // Optional watermark via drawtext (requires system ffmpeg with libfreetype)
+    console.log(`▶ [YT] Scaling to ${w}x${h}${removeWatermark ? ' + removing existing watermarks' : ''}${watermarkText ? ' + adding TollyClicks text' : ''}...`);
+
     const wmSafe = watermarkText ? watermarkText.replace(/[^A-Za-z0-9 _\-]/g, '') : '';
-    const baseVf = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
-    const wmFilter = (wmSafe && ffmpegHasDrawtext)
-      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=${wmSafe}:fontcolor=white:fontsize=80:x=(w-text_w)/2:y=h-text_h-120:box=1:boxcolor=0x00000099:boxborderw=22`
+
+    // ✅ Step 1: Delogo — erase existing channel watermarks at all 4 corners BEFORE scaling
+    // Targets "Binodon Chitro" (bottom-right) and other common logo positions
+    const delogoFilter = removeWatermark
+      ? [
+          `delogo=x=iw*0.6:y=ih*0.82:w=iw*0.4:h=ih*0.18`,   // bottom-right (Binodon Chitro, etc.)
+          `delogo=x=0:y=ih*0.82:w=iw*0.4:h=ih*0.18`,          // bottom-left
+          `delogo=x=iw*0.7:y=0:w=iw*0.3:h=ih*0.1`,            // top-right
+          `delogo=x=0:y=0:w=iw*0.3:h=ih*0.1`,                 // top-left
+        ].join(',') + ','
       : '';
-    if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — system ffmpeg with drawtext not available');
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${baseVf}${wmFilter}" -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+
+    // ✅ Step 2: Scale + crop to 9:16 portrait format
+    const scaleFilter = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
+
+    // ✅ Step 3: Add TollyClicks watermark text bottom-center
+    const wmFilter = (wmSafe && ffmpegHasDrawtext)
+      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/22:x=(w-text_w)/2:y=h-text_h-80:box=1:boxcolor=0x00000099:boxborderw=20`
+      : '';
+    if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false. Ensure nixpacks.toml has ffmpeg-full.');
+
+    const vf = `${delogoFilter}${scaleFilter}${wmFilter}`;
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
     const folderPath = (folder || 'YouTube-Downloads').replace(/\/$/, '');
@@ -887,20 +849,16 @@ app.post('/delete-r2', async (req, res) => {
   }
 });
 
-// Endpoint to upload new cookies.txt directly to R2 (no redeploy needed)
-// POST /upload-cookies with body: { cookiesText: "...full cookies.txt content..." }
 app.post('/upload-cookies', async (req, res) => {
   const { cookiesText } = req.body;
   if (!cookiesText || !cookiesText.trim()) return res.status(400).json({ error: 'cookiesText required' });
   try {
-    const { PutObjectCommand } = require('@aws-sdk/client-s3');
     await s3.send(new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: COOKIES_R2_KEY,
       Body: cookiesText,
       ContentType: 'text/plain'
     }));
-    // Reload into memory immediately
     await loadCookiesFromR2();
     res.json({ success: true, message: 'Cookies uploaded to R2 and reloaded' });
   } catch(e) {
@@ -908,10 +866,8 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.11.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.12.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
-// CORS proxy — streams an R2 video to the browser with permissive CORS headers
-// Usage: GET /r2-proxy?key=War-Videos/filename.mp4
 app.options('/r2-proxy', (req, res) => {
   res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET', 'Access-Control-Allow-Headers': '*' });
   res.sendStatus(204);
@@ -932,11 +888,10 @@ app.get('/r2-proxy', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT} — v3.11.0 (Invidious proxy fallback + jsRuntime fix + watermark + maxDuration)`);
-  // Load cookies from R2 (or env var fallback) before accepting requests
+  console.log(`Server running on port ${PORT} — v3.12.0 (delogo watermark removal + TollyClicks text + nixpacks ffmpeg-full)`);
   await loadCookiesFromR2();
-  // Auto-update yt-dlp at startup to get latest n-challenge solver + YouTube fixes
   exec('yt-dlp -U 2>&1', { env: ytDlpEnv }, (err, stdout) => {
     const out = (stdout || '').trim();
     if (out) console.log('🔄 yt-dlp update:', out.split('\n')[0]);
