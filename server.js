@@ -628,7 +628,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         await execAsync(
           `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
-          `${jsRuntime} --extractor-args "youtube:player_client=android,ios" -o "${inp}" "${youtubeUrl}"`,
+          `${jsRuntime} --extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
         );
         console.log('✅ [YT] Fallback android/ios succeeded');
@@ -640,7 +640,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           await execAsync(
             `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
             `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
-            `${jsRuntime} --extractor-args "youtube:player_client=mweb" -o "${inp}" "${youtubeUrl}"`,
+            `${jsRuntime} --extractor-args "youtube:player_client=mweb" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
           console.log('✅ [YT] Fallback mweb succeeded');
