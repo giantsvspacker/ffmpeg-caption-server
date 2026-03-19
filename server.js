@@ -830,7 +830,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
     // ✅ Step 3: Add TollyClicks watermark text bottom-center
     const wmFilter = (wmSafe && ffmpegHasDrawtext)
-      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/22:x=(w-text_w)/2:y=h-text_h-80:box=1:boxcolor=0x00000099:boxborderw=20`
+      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
       : '';
     if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false. Ensure nixpacks.toml has ffmpeg-full.');
 
