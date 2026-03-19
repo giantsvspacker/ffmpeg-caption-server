@@ -1,2 +1,4 @@
 [phases.setup]
 aptPkgs = ["ffmpeg", "fonts-dejavu-core"]
+[phases.setup]
+nixPkgs = ["ffmpeg-full"]
