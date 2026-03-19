@@ -720,8 +720,28 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       const msg = (ytErr.message || '') + (ytErr.stderr || '');
       console.error('❌ [YT] yt-dlp error:', msg.slice(0, 800));
       if (msg.includes('429')) throw new Error('YouTube rate-limited this server IP (429). Wait ~10 min and retry.');
-      if (msg.includes('Sign in') || msg.includes('age-restricted') || msg.includes('Only images') || msg.includes('confirm your age') || msg.includes('403') || msg.includes('Forbidden') || msg.includes('inappropriate') || msg.includes('unavailable for certain audiences') || msg.includes('Login required') || msg.includes('Private video')) {
-        console.log(`⏭️ Skipping — restricted/blocked: ${youtubeUrl}`);
+
+      // For YouTube: only skip if GENUINELY restricted (age-gate, private, copyright)
+      // Do NOT skip for bot-detection "Sign in" errors — throw instead so n8n can retry
+      const isGenuinelyRestricted =
+        msg.includes('age-restricted') ||
+        msg.includes('confirm your age') ||
+        msg.includes('inappropriate') ||
+        msg.includes('unavailable for certain audiences') ||
+        msg.includes('Private video') ||
+        msg.includes('Login required') ||
+        msg.includes('members-only');
+
+      // For non-YouTube (Instagram, TikTok etc) also skip on Forbidden/Sign in
+      const isNonYTBlocked = !isYouTube && (
+        msg.includes('Sign in') ||
+        msg.includes('403') ||
+        msg.includes('Forbidden') ||
+        msg.includes('Only images')
+      );
+
+      if (isGenuinelyRestricted || isNonYTBlocked) {
+        console.log(`⏭️ Skipping — genuinely restricted: ${youtubeUrl}`);
         cleanup();
         return res.json({ skipped: true, reason: 'blocked', youtubeUrl });
       }
@@ -730,6 +750,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         cleanup();
         return res.json({ skipped: true, reason: 'no_video', youtubeUrl });
       }
+      // YouTube bot-detection: throw error (not skip) so n8n can retry
+      console.log(`❌ [YT] Download failed (bot detection or network) — not skipping, throwing error for retry`);
       throw ytErr;
     }
 
@@ -797,16 +819,10 @@ app.post('/download-youtube-to-r2', async (req, res) => {
 
     const wmSafe = watermarkText ? watermarkText.replace(/[^A-Za-z0-9 _\-]/g, '') : '';
 
-    // ✅ Step 1: drawbox — cover existing channel watermarks at all 4 corners BEFORE scaling
-    // Uses drawbox (supports iw/ih expressions unlike delogo)
-    // Targets "Binodon Chitro" (bottom-right) and other common logo positions
+    // ✅ Step 1: drawbox — cover small watermark area bottom-right only
+    // Small targeted box — only covers "Binodon Chitro" style logos, not video content
     const delogoFilter = removeWatermark
-      ? [
-          `drawbox=x=iw*0.6:y=ih*0.82:w=iw*0.4:h=ih*0.18:color=black:t=fill`,   // bottom-right
-          `drawbox=x=0:y=ih*0.82:w=iw*0.4:h=ih*0.18:color=black:t=fill`,          // bottom-left
-          `drawbox=x=iw*0.7:y=0:w=iw*0.3:h=ih*0.1:color=black:t=fill`,            // top-right
-          `drawbox=x=0:y=0:w=iw*0.3:h=ih*0.1:color=black:t=fill`,                 // top-left
-        ].join(',') + ','
+      ? `drawbox=x=iw*0.55:y=ih*0.92:w=iw*0.45:h=ih*0.08:color=black:t=fill,`
       : '';
 
     // ✅ Step 2: Scale + crop to 9:16 portrait format
