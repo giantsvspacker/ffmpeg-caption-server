@@ -841,33 +841,53 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       }
     }
 
-    console.log(`▶ [YT] Scaling to ${w}x${h}${removeWatermark ? ' + removing existing watermarks' : ''}${watermarkText ? ' + adding TollyClicks text' : ''}...`);
-
     const wmSafe = watermarkText ? watermarkText.replace(/[^A-Za-z0-9 _\-]/g, '') : '';
+    if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false.');
 
-    // ✅ Step 1: drawbox — cover small watermark area bottom-right only
-    // Small targeted box — only covers "Binodon Chitro" style logos, not video content
-    const delogoFilter = removeWatermark
-      ? `drawbox=x=iw*0.55:y=ih*0.92:w=iw*0.45:h=ih*0.08:color=black:t=fill,`
-      : '';
+    // ✅ Get source video dimensions
+    let srcW = 0, srcH = 0;
+    try {
+      const probeRes = await execAsync(
+        `${ffmpegPath} -i "${sourceForScale}" 2>&1 | grep -oP 'Stream.*Video.* \\K\\d+x\\d+'`,
+        { timeout: 15000, maxBuffer: MAX_BUFFER }
+      );
+      const dimMatch = (probeRes.stdout || '').trim().split('\n')[0];
+      if (dimMatch && dimMatch.includes('x')) {
+        [srcW, srcH] = dimMatch.split('x').map(Number);
+        console.log(`📐 [YT] Source dimensions: ${srcW}x${srcH}`);
+      }
+    } catch(e) { console.warn('⚠️ [YT] Could not probe dimensions:', e.message); }
 
-    // ✅ Step 2: Scale + crop to 9:16 portrait format
-    const scaleFilter = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
+    const needsWatermark = !!(wmSafe && ffmpegHasDrawtext);
+    const needsDelogo    = !!removeWatermark;
 
-    // ✅ Step 3: Add TollyClicks watermark text bottom-center
-    const wmFilter = (wmSafe && ffmpegHasDrawtext)
-      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
-      : '';
-    if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false. Ensure nixpacks.toml has ffmpeg-full.');
+    // ✅ Check if video is already 9:16 portrait (within 2% tolerance)
+    const aspectRatio = srcW > 0 && srcH > 0 ? srcW / srcH : 0;
+    const isPortrait916 = aspectRatio > 0 && Math.abs(aspectRatio - (9/16)) < 0.02;
 
-    // ✅ Always scale to target resolution (4K 9:16) — use ultrafast preset to avoid OOM on Railway
-    const finalScaleFilter = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
-    const finalWmFilter = (wmSafe && ffmpegHasDrawtext)
-      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
-      : '';
-    const vf = `${delogoFilter}${finalScaleFilter}${finalWmFilter}`;
-    // ultrafast = lowest RAM usage for 4K encode, prevents OOM crash on Railway free tier
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset ultrafast -crf 23 -threads 1 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    // ✅ Cap encode resolution at 1080p portrait (1080×1920) to prevent OOM on Railway free tier
+    //    TikTok/YouTube sources are max 1080p anyway — upscaling to 4K only wastes RAM with no quality gain
+    const encW = Math.min(w, 1080);
+    const encH = Math.min(h, 1920);
+
+    let cmd;
+    if (isPortrait916 && !needsWatermark && !needsDelogo) {
+      // ✅ Already 9:16 and no filters needed — just remux (stream copy), zero re-encode RAM
+      console.log(`▶ [YT] Already 9:16 — remuxing (stream copy, no re-encode)...`);
+      cmd = `${ffmpegPath} -y -i "${sourceForScale}" -c copy -movflags +faststart "${out}"`;
+    } else {
+      // ✅ Need to crop/scale or add watermark — encode at 1080p max to avoid OOM
+      console.log(`▶ [YT] Encoding to ${encW}x${encH}${needsDelogo ? ' + removing watermark' : ''}${needsWatermark ? ' + adding watermark text' : ''}...`);
+      const delogoFilter = needsDelogo
+        ? `drawbox=x=iw*0.55:y=ih*0.92:w=iw*0.45:h=ih*0.08:color=black:t=fill,`
+        : '';
+      const scaleFilter = `scale=${encW}:${encH}:force_original_aspect_ratio=increase:flags=lanczos,crop=${encW}:${encH}`;
+      const wmFilter = needsWatermark
+        ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
+        : '';
+      const vf = `${delogoFilter}${scaleFilter}${wmFilter}`;
+      cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset ultrafast -crf 23 -threads 1 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    }
 
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
