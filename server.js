@@ -635,19 +635,20 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         ytErr = null;
       } catch (e2) {
         ytErr = e2;
-        console.warn('⚠️ [YT] android/ios failed — retrying with mweb client...');
+        // ✅ Skip mweb — it now requires GVS PO Token (always 403). Try android_vr instead.
+        console.warn('⚠️ [YT] android/ios failed — retrying with android_vr client...');
         try {
           await execAsync(
             `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
             `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
-            `${jsRuntime} --extractor-args "youtube:player_client=mweb" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+            `${jsRuntime} --extractor-args "youtube:player_client=android_vr" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
-          console.log('✅ [YT] Fallback mweb succeeded');
+          console.log('✅ [YT] Fallback android_vr succeeded');
           ytErr = null;
         } catch (e3) {
           ytErr = e3;
-          console.warn('⚠️ [YT] mweb failed — trying Invidious proxy fallback...');
+          console.warn('⚠️ [YT] android_vr failed — trying Invidious proxy fallback...');
           const vidIdMatch = youtubeUrl.match(/(?:shorts\/|v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
           if (vidIdMatch) {
             const vidId = vidIdMatch[1];
