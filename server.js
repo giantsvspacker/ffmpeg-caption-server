@@ -680,20 +680,43 @@ app.post('/download-youtube-to-r2', async (req, res) => {
                   r.on('timeout', () => { r.destroy(); reject(new Error('timeout')); });
                   r.end();
                 });
-                const mp4Streams = (invInfo.formatStreams || [])
-                  .filter(f => (f.container || '').includes('mp4') || (f.type || '').includes('video/mp4'))
-                  .sort((a, b) => parseInt(b.resolution || 0) - parseInt(a.resolution || 0));
-                const best = mp4Streams[0];
-                if (!best || !best.itag) throw new Error(`No mp4 format in response (got ${(invInfo.formatStreams||[]).length} streams)`);
-                const proxyUrl = `https://${inst}/latest_version?id=${vidId}&itag=${best.itag}&local=true`;
-                console.log(`🔵 [YT] Invidious proxy: itag=${best.itag} res=${best.resolution || '?'} via ${inst}`);
-                await execAsync(
-                  `curl -L --max-time 300 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o "${inp}" "${proxyUrl}"`,
-                  { timeout: 360000, maxBuffer: MAX_BUFFER }
-                );
-                const fileSize = fs.existsSync(inp) ? fs.statSync(inp).size : 0;
-                if (fileSize < 50000) throw new Error(`file too small (${fileSize} bytes) — likely an error page`);
-                console.log(`✅ [YT] Invidious proxy succeeded (${(fileSize/1024/1024).toFixed(1)} MB via ${inst})`);
+                // ✅ Try adaptive formats first (1080p+) — separate video+audio merged with ffmpeg
+                const adaptiveVideo = (invInfo.adaptiveFormats || [])
+                  .filter(f => (f.type || '').includes('video/mp4') && !f.audioChannels)
+                  .sort((a, b) => parseInt(b.resolution || b.bitrate || 0) - parseInt(a.resolution || a.bitrate || 0));
+                const adaptiveAudio = (invInfo.adaptiveFormats || [])
+                  .filter(f => (f.type || '').includes('audio/mp4') || (f.type || '').includes('audio/webm'))
+                  .sort((a, b) => parseInt(b.bitrate || 0) - parseInt(a.bitrate || 0));
+
+                if (adaptiveVideo[0] && adaptiveAudio[0]) {
+                  // Download best video + best audio separately, merge with ffmpeg
+                  const tmpVid = `/tmp/inv_vid_${ts}.mp4`;
+                  const tmpAud = `/tmp/inv_aud_${ts}.m4a`;
+                  const videoUrl = `https://${inst}/latest_version?id=${vidId}&itag=${adaptiveVideo[0].itag}&local=true`;
+                  const audioUrl = `https://${inst}/latest_version?id=${vidId}&itag=${adaptiveAudio[0].itag}&local=true`;
+                  console.log(`🔵 [YT] Invidious adaptive: video itag=${adaptiveVideo[0].itag} res=${adaptiveVideo[0].resolution||'?'}, audio itag=${adaptiveAudio[0].itag}`);
+                  await execAsync(`curl -L --max-time 300 -A "Mozilla/5.0" -o "${tmpVid}" "${videoUrl}"`, { timeout: 360000, maxBuffer: MAX_BUFFER });
+                  await execAsync(`curl -L --max-time 300 -A "Mozilla/5.0" -o "${tmpAud}" "${audioUrl}"`, { timeout: 360000, maxBuffer: MAX_BUFFER });
+                  const vidSize = fs.existsSync(tmpVid) ? fs.statSync(tmpVid).size : 0;
+                  const audSize = fs.existsSync(tmpAud) ? fs.statSync(tmpAud).size : 0;
+                  if (vidSize < 50000 || audSize < 10000) throw new Error(`Adaptive streams too small: vid=${vidSize} aud=${audSize}`);
+                  await execAsync(`${ffmpegPath} -y -i "${tmpVid}" -i "${tmpAud}" -c copy "${inp}"`, { timeout: 120000, maxBuffer: MAX_BUFFER });
+                  try { fs.unlinkSync(tmpVid); fs.unlinkSync(tmpAud); } catch(e) {}
+                  console.log(`✅ [YT] Invidious adaptive (1080p+) succeeded via ${inst}`);
+                } else {
+                  // Fallback to muxed streams (max 720p)
+                  const mp4Streams = (invInfo.formatStreams || [])
+                    .filter(f => (f.container || '').includes('mp4') || (f.type || '').includes('video/mp4'))
+                    .sort((a, b) => parseInt(b.resolution || 0) - parseInt(a.resolution || 0));
+                  const best = mp4Streams[0];
+                  if (!best || !best.itag) throw new Error(`No mp4 format in response (got ${(invInfo.formatStreams||[]).length} streams)`);
+                  const proxyUrl = `https://${inst}/latest_version?id=${vidId}&itag=${best.itag}&local=true`;
+                  console.log(`🔵 [YT] Invidious muxed: itag=${best.itag} res=${best.resolution || '?'} via ${inst}`);
+                  await execAsync(`curl -L --max-time 300 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o "${inp}" "${proxyUrl}"`, { timeout: 360000, maxBuffer: MAX_BUFFER });
+                  const fileSize = fs.existsSync(inp) ? fs.statSync(inp).size : 0;
+                  if (fileSize < 50000) throw new Error(`file too small (${fileSize} bytes) — likely an error page`);
+                  console.log(`✅ [YT] Invidious muxed succeeded (${(fileSize/1024/1024).toFixed(1)} MB via ${inst})`);
+                }
                 ytErr = null;
                 invDone = true;
               } catch(eI) {
@@ -835,28 +858,14 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       : '';
     if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false. Ensure nixpacks.toml has ffmpeg-full.');
 
-    // ✅ Detect source resolution — skip upscaling if source is smaller than target (avoids OOM crash)
-    let srcW = 0, srcH = 0;
-    try {
-      const probeOut = await execAsync(`${ffmpegPath} -i "${sourceForScale}" 2>&1 || true`, { timeout: 15000, maxBuffer: MAX_BUFFER });
-      const dimMatch = ((probeOut.stdout || '') + (probeOut.stderr || '')).match(/(\d{3,4})x(\d{3,4})/);
-      if (dimMatch) { srcW = parseInt(dimMatch[1]); srcH = parseInt(dimMatch[2]); }
-    } catch(e) {
-      const dimMatch = (e.stderr || '').match(/(\d{3,4})x(\d{3,4})/);
-      if (dimMatch) { srcW = parseInt(dimMatch[1]); srcH = parseInt(dimMatch[2]); }
-    }
-
-    // If source is smaller than half target resolution, keep native size (no upscaling)
-    const useW = (srcW > 0 && srcW < w / 2) ? srcW : w;
-    const useH = (srcH > 0 && srcH < h / 2) ? srcH : h;
-    if (useW !== w || useH !== h) console.log(`⚠️ [YT] Source ${srcW}x${srcH} too small for ${w}x${h} — keeping native resolution`);
-
-    const finalScaleFilter = `scale=${useW}:${useH}:force_original_aspect_ratio=increase:flags=lanczos,crop=${useW}:${useH}`;
+    // ✅ Always scale to target resolution (4K 9:16) — use ultrafast preset to avoid OOM on Railway
+    const finalScaleFilter = `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
     const finalWmFilter = (wmSafe && ffmpegHasDrawtext)
       ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
       : '';
     const vf = `${delogoFilter}${finalScaleFilter}${finalWmFilter}`;
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset superfast -crf 23 -threads 2 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    // ultrafast = lowest RAM usage for 4K encode, prevents OOM crash on Railway free tier
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset ultrafast -crf 23 -threads 1 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
 
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
