@@ -653,11 +653,13 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           if (vidIdMatch) {
             const vidId = vidIdMatch[1];
             const invInstances = [
-              'iv.datura.network',
+              'inv.nadeko.net',
               'invidious.privacydev.net',
-              'vid.puffyan.us',
+              'yewtu.be',
+              'invidious.perennialte.ch',
+              'invidious.jing.rocks',
+              'iv.datura.network',
               'invidious.projectsegfau.lt',
-              'yt.artemislena.eu',
             ];
             let invDone = false;
             for (const inst of invInstances) {
@@ -913,7 +915,18 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.12.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.13.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+
+// Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
+app.get('/reload-cookies', async (req, res) => {
+  try {
+    cookiesReady = false;
+    await loadCookiesFromR2();
+    res.json({ success: true, cookiesReady, message: cookiesReady ? 'Cookies reloaded from R2' : 'No cookies found in R2' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.options('/r2-proxy', (req, res) => {
   res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET', 'Access-Control-Allow-Headers': '*' });
