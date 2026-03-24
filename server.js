@@ -834,8 +834,28 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       : '';
     if (wmSafe && !ffmpegHasDrawtext) console.warn('⚠️ Watermark skipped — ffmpegHasDrawtext is false. Ensure nixpacks.toml has ffmpeg-full.');
 
-    const vf = `${delogoFilter}${scaleFilter}${wmFilter}`;
-    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+    // ✅ Detect source resolution — skip upscaling if source is smaller than target (avoids OOM crash)
+    let srcW = 0, srcH = 0;
+    try {
+      const probeOut = await execAsync(`${ffmpegPath} -i "${sourceForScale}" 2>&1 || true`, { timeout: 15000, maxBuffer: MAX_BUFFER });
+      const dimMatch = ((probeOut.stdout || '') + (probeOut.stderr || '')).match(/(\d{3,4})x(\d{3,4})/);
+      if (dimMatch) { srcW = parseInt(dimMatch[1]); srcH = parseInt(dimMatch[2]); }
+    } catch(e) {
+      const dimMatch = (e.stderr || '').match(/(\d{3,4})x(\d{3,4})/);
+      if (dimMatch) { srcW = parseInt(dimMatch[1]); srcH = parseInt(dimMatch[2]); }
+    }
+
+    // If source is smaller than half target resolution, keep native size (no upscaling)
+    const useW = (srcW > 0 && srcW < w / 2) ? srcW : w;
+    const useH = (srcH > 0 && srcH < h / 2) ? srcH : h;
+    if (useW !== w || useH !== h) console.log(`⚠️ [YT] Source ${srcW}x${srcH} too small for ${w}x${h} — keeping native resolution`);
+
+    const finalScaleFilter = `scale=${useW}:${useH}:force_original_aspect_ratio=increase:flags=lanczos,crop=${useW}:${useH}`;
+    const finalWmFilter = (wmSafe && ffmpegHasDrawtext)
+      ? `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${wmSafe}':fontcolor=white:fontsize=h/66:x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=0x00000088:boxborderw=10`
+      : '';
+    const vf = `${delogoFilter}${finalScaleFilter}${finalWmFilter}`;
+    const cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset superfast -crf 23 -threads 2 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
 
     await execAsync(cmd, { timeout: 540000, maxBuffer: MAX_BUFFER });
 
