@@ -865,18 +865,20 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     const aspectRatio = srcW > 0 && srcH > 0 ? srcW / srcH : 0;
     const isPortrait916 = aspectRatio > 0 && Math.abs(aspectRatio - (9/16)) < 0.02;
 
-    // ✅ Cap encode resolution at 1080p portrait (1080×1920) to prevent OOM on Railway free tier
-    //    TikTok/YouTube sources are max 1080p anyway — upscaling to 4K only wastes RAM with no quality gain
-    const encW = Math.min(w, 1080);
-    const encH = Math.min(h, 1920);
+    // Use the requested dimensions (caller wants 4K upscale — no cap)
+    const encW = w;
+    const encH = h;
+
+    // Only remux (stream copy) if video is already 9:16 AND source is large enough (no upscale needed)
+    const sourceIsLargeEnough = srcW > 0 && srcH > 0 && srcW >= encW && srcH >= encH;
 
     let cmd;
-    if (isPortrait916 && !needsWatermark && !needsDelogo) {
-      // ✅ Already 9:16 and no filters needed — just remux (stream copy), zero re-encode RAM
-      console.log(`▶ [YT] Already 9:16 — remuxing (stream copy, no re-encode)...`);
+    if (isPortrait916 && !needsWatermark && !needsDelogo && sourceIsLargeEnough) {
+      // Already 9:16 and source resolution >= target — just remux (stream copy)
+      console.log(`▶ [YT] Already 9:16 at ${srcW}x${srcH} >= ${encW}x${encH} — remuxing (stream copy)...`);
       cmd = `${ffmpegPath} -y -i "${sourceForScale}" -c copy -movflags +faststart "${out}"`;
     } else {
-      // ✅ Need to crop/scale or add watermark — encode at 1080p max to avoid OOM
+      // Crop/scale to 9:16 and/or upscale to target resolution
       console.log(`▶ [YT] Encoding to ${encW}x${encH}${needsDelogo ? ' + removing watermark' : ''}${needsWatermark ? ' + adding watermark text' : ''}...`);
       const delogoFilter = needsDelogo
         ? `drawbox=x=iw*0.55:y=ih*0.92:w=iw*0.45:h=ih*0.08:color=black:t=fill,`
