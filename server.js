@@ -553,7 +553,7 @@ app.post('/scale-video', async (req, res) => {
 //   3. Improved encoding quality: crf 20 → crf 18
 // ============================================================
 app.post('/download-youtube-to-r2', async (req, res) => {
-  const { youtubeUrl, folder, videoName, width, height, maxDuration, watermarkText, removeWatermark } = req.body;
+  const { youtubeUrl, folder, videoName, width, height, maxDuration, watermarkText, removeWatermark, smartScale } = req.body;
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
 
   const w = parseInt(width)  || 2160;
@@ -865,9 +865,34 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     const aspectRatio = srcW > 0 && srcH > 0 ? srcW / srcH : 0;
     const isPortrait916 = aspectRatio > 0 && Math.abs(aspectRatio - (9/16)) < 0.02;
 
-    // Use the requested dimensions (caller wants 4K upscale — no cap)
-    const encW = w;
-    const encH = h;
+    // Smart scale: auto-determine output based on source resolution
+    // Rule: always 9:16 portrait, minimum 1080×1920, no forced upscale if already ≥ 1080p
+    let encW, encH;
+    if (smartScale && srcW > 0 && srcH > 0) {
+      if (srcW >= srcH) {
+        // Landscape or square: portrait width = landscape height, portrait height = width * 16/9
+        const naturalH = Math.round(srcH * 16 / 9);
+        if (naturalH < 1920) {
+          encW = 1080; encH = 1920; // below 1080p → upscale to minimum 1080p portrait
+        } else {
+          encW = srcH % 2 === 0 ? srcH : srcH - 1;
+          encH = naturalH % 2 === 0 ? naturalH : naturalH - 1;
+        }
+      } else {
+        // Portrait source: use srcH directly
+        if (srcH < 1920) {
+          encW = 1080; encH = 1920; // below 1080p → upscale to minimum 1080p portrait
+        } else {
+          encW = srcW % 2 === 0 ? srcW : srcW - 1;
+          encH = srcH % 2 === 0 ? srcH : srcH - 1;
+        }
+      }
+      console.log(`🎯 [YT] smartScale: source ${srcW}x${srcH} → output ${encW}x${encH}`);
+    } else {
+      // Fixed dimensions from caller (or fallback)
+      encW = w;
+      encH = h;
+    }
 
     // Only remux (stream copy) if video is already 9:16 AND source is large enough (no upscale needed)
     const sourceIsLargeEnough = srcW > 0 && srcH > 0 && srcW >= encW && srcH >= encH;
