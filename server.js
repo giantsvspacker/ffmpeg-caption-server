@@ -355,9 +355,9 @@ app.post('/video-to-mp3', async (req, res) => {
     const cookiesFlag = getCookiesFlag();
     const jsRuntime = '--js-runtimes node';
     const isYouTube = /youtube\.com|youtu\.be/.test(videoUrl);
-    // iOS client: no BotGuard needed — fast and avoids Railway 5-min timeout
+    // android client: supports highest quality (4K), no BotGuard needed
     const extractorArgs = isYouTube
-      ? '--extractor-args "youtube:player_client=ios"'
+      ? '--extractor-args "youtube:player_client=android"'
       : '';
 
     // Fetch title
@@ -693,9 +693,9 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     const cookiesFlag = getCookiesFlag();
     const jsRuntime = '--js-runtimes node';
     const isYouTube = /youtube\.com|youtu\.be/.test(youtubeUrl);
-    // iOS client: no BotGuard needed — fast and avoids Railway 5-min timeout
+    // android client: supports 4K, no BotGuard needed, fast
     const extractorArgs = isYouTube
-      ? '--extractor-args "youtube:player_client=ios"'
+      ? '--extractor-args "youtube:player_client=android"'
       : '';
 
     let rawTitle = '';
@@ -1191,7 +1191,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.20.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.21.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
