@@ -29,6 +29,10 @@ const MAX_BUFFER = 1024 * 1024 * 200; // 200 MB — prevents stderr maxBuffer ex
 // Make node binary visible to yt-dlp subprocesses so they can solve YouTube's n-challenge
 const ytDlpEnv = { ...process.env, PATH: `${require('path').dirname(process.execPath)}:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}` };
 
+// Residential proxy support — set YT_PROXY env var on Railway to bypass datacenter IP blocks
+// Format: socks5://user:pass@host:port  OR  http://user:pass@host:port
+const proxyFlag = process.env.YT_PROXY ? `--proxy "${process.env.YT_PROXY}"` : '';
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
@@ -364,7 +368,7 @@ app.post('/video-to-mp3', async (req, res) => {
     let rawTitle = '';
     try {
       const { stdout: titleOut } = await execAsync(
-        `yt-dlp --print "%(title)s" --no-playlist ${jsRuntime} ${extractorArgs} ${cookiesFlag} "${videoUrl}"`,
+        `yt-dlp --print "%(title)s" --no-playlist ${jsRuntime} ${extractorArgs} ${proxyFlag} ${cookiesFlag} "${videoUrl}"`,
         { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
       );
       rawTitle = (titleOut || '').trim();
@@ -386,7 +390,7 @@ app.post('/video-to-mp3', async (req, res) => {
 
     const ytdlpAudioCmd = (extraArgs) =>
       `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestaudio" -x --audio-format mp3 --audio-quality 192k ` +
-      `--no-playlist --concurrent-fragments 1 ${jsRuntime} ${extraArgs} ${cookiesFlag} -o "${tmpMp3}" "${videoUrl}"`;
+      `--no-playlist --concurrent-fragments 1 ${jsRuntime} ${extraArgs} ${proxyFlag} ${cookiesFlag} -o "${tmpMp3}" "${videoUrl}"`;
 
     let ytErr;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -704,7 +708,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     try {
       const { stdout: titleOut } = await execAsync(
         `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s|||%(description)s" --no-playlist ` +
-        `${jsRuntime} ${extractorArgs} ${cookiesFlag} "${youtubeUrl}"`,
+        `${jsRuntime} ${extractorArgs} ${proxyFlag} ${cookiesFlag} "${youtubeUrl}"`,
         { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
       );
       const parts = (titleOut || '').split('|||');
@@ -731,7 +735,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
           `--concurrent-fragments 1 ` +
-          `${jsRuntime} ${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+          `${jsRuntime} ${extractorArgs} ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
         );
         ytErr = null; break;
@@ -750,7 +754,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         await execAsync(
           `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
-          `${jsRuntime} --extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+          `${jsRuntime} --extractor-args "youtube:player_client=android,ios" ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
         );
         console.log('✅ [YT] Fallback android/ios succeeded');
@@ -763,7 +767,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           await execAsync(
             `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
             `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
-            `${jsRuntime} --extractor-args "youtube:player_client=android_vr" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+            `${jsRuntime} --extractor-args "youtube:player_client=android_vr" ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
           console.log('✅ [YT] Fallback android_vr succeeded');
@@ -1191,7 +1195,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.21.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.22.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext, proxy: !!process.env.YT_PROXY }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
