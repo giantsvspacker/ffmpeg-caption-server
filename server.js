@@ -119,6 +119,44 @@ async function downloadFile(url, dest, hops = 0) {
   });
 }
 
+// Cobalt API helper — POST to api.cobalt.tools, returns { directUrl, filename }
+// mode: 'auto' (video+audio), 'audio' (audio only), 'mute' (video only)
+function cobaltGetUrl(sourceUrl, mode = 'auto') {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ url: sourceUrl, videoQuality: 'max', downloadMode: mode, filenameStyle: 'pretty' });
+    const req = https.request({
+      hostname: 'api.cobalt.tools',
+      path: '/',
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.status === 'redirect' || json.status === 'tunnel') {
+            resolve({ directUrl: json.url, filename: json.filename || '' });
+          } else if (json.status === 'picker') {
+            const items = json.picker || [];
+            const item = items.find(i => i.type === 'video') || items[0];
+            resolve({ directUrl: item ? item.url : '', filename: json.filename || '' });
+          } else if (json.status === 'local-processing') {
+            const tunnels = json.tunnel || [];
+            resolve({ directUrl: tunnels[0] || '', filename: json.filename || '' });
+          } else {
+            reject(new Error('Cobalt: ' + (json.error ? json.error.code : JSON.stringify(json))));
+          }
+        } catch(e) { reject(new Error('Cobalt invalid JSON: ' + e.message)); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Cobalt timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
 async function uploadToR2(filePath, key) {
   const buf = fs.readFileSync(filePath);
   await s3.send(new PutObjectCommand({
@@ -243,20 +281,18 @@ app.post('/video-to-mp3', async (req, res) => {
   const artistName = artist || (folder && folder.toLowerCase().includes('lufiaurora') ? 'LufiAurora' : 'NovaZiri');
 
   const ts = Date.now();
-  const tmpVideo = `/tmp/vid_${ts}`;
+  const tmpAudio = `/tmp/cob_audio_${ts}`;
   const tmpMp3   = `/tmp/audio_${ts}.mp3`;
-  const cleanup  = () => [tmpVideo, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+  const cleanup  = () => [tmpAudio, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
-    console.log(`▶ [MP3:${artistName}] Getting title: ${videoUrl}`);
-    let rawTitle = '';
-    try {
-      const { stdout: titleOut } = await execAsync(
-        `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(title)s" --no-playlist "${videoUrl}"`,
-        { timeout: 30000, maxBuffer: MAX_BUFFER }
-      );
-      rawTitle = (titleOut || '').trim();
-    } catch(e) { /* title fetch failed silently */ }
+    console.log(`▶ [MP3:${artistName}] Calling Cobalt API for: ${videoUrl}`);
+
+    // Get audio URL + filename via Cobalt (bypasses YouTube bot detection)
+    const { directUrl, filename } = await cobaltGetUrl(videoUrl, 'audio');
+    if (!directUrl) throw new Error('Cobalt returned no audio URL');
+
+    let rawTitle = (filename || '').replace(/\.[^.]+$/, '').trim();
 
     let cleanTitle = rawTitle
       .replace(/^([\d.,]+[KMBkm]?\s+\w+[\s\u00B7·•,]+)+/i, '')
@@ -264,17 +300,6 @@ app.post('/video-to-mp3', async (req, res) => {
       .trim();
 
     if (/^[\d\s.,KMBkm\u00B7·•–-]+$/.test(cleanTitle)) cleanTitle = '';
-
-    if (!cleanTitle) {
-      try {
-        const { stdout: descOut } = await execAsync(
-          `yt-dlp --ffmpeg-location "${ffmpegPath}" --print "%(description)s" --no-playlist "${videoUrl}"`,
-          { timeout: 30000, maxBuffer: MAX_BUFFER }
-        );
-        const firstLine = (descOut || '').split('\n').map(l => l.trim()).find(l => l.length > 5) || '';
-        cleanTitle = firstLine.replace(/\s*\|.*$/, '').trim();
-      } catch(e) { /* description fetch failed silently */ }
-    }
 
     const safeTitle = (cleanTitle || `audio_${ts}`)
       .replace(/lofilulla/gi, artistName)
@@ -284,15 +309,11 @@ app.post('/video-to-mp3', async (req, res) => {
       || `audio_${ts}`;
 
     console.log(`▶ [MP3] Downloading audio: ${rawTitle}`);
-    await execAsync(
-      `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestaudio[ext=m4a]/bestaudio/best" ` +
-      `--no-playlist -o "${tmpVideo}" "${videoUrl}"`,
-      { timeout: 300000, maxBuffer: MAX_BUFFER }
-    );
+    await downloadFile(directUrl, tmpAudio);
 
     console.log(`▶ [MP3] Converting to MP3...`);
     await execAsync(
-      `${ffmpegPath} -y -i "${tmpVideo}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
+      `${ffmpegPath} -y -i "${tmpAudio}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
       { timeout: 120000, maxBuffer: MAX_BUFFER }
     );
 
@@ -1058,7 +1079,7 @@ app.post('/cobalt-scale', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.14.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.15.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
