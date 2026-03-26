@@ -348,26 +348,34 @@ app.post('/video-to-mp3', async (req, res) => {
   const artistName = artist || (folder && folder.toLowerCase().includes('lufiaurora') ? 'LufiAurora' : 'NovaZiri');
 
   const ts = Date.now();
-  const tmpAudio = `/tmp/cob_audio_${ts}`;
   const tmpMp3   = `/tmp/audio_${ts}.mp3`;
-  const cleanup  = () => [tmpAudio, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+  const cleanup  = () => [tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
 
   try {
-    console.log(`▶ [MP3:${artistName}] Calling Cobalt API for: ${videoUrl}`);
+    const cookiesFlag = getCookiesFlag();
+    const jsRuntime = '--js-runtimes node';
+    const isYouTube = /youtube\.com|youtu\.be/.test(videoUrl);
+    const extractorArgs = isYouTube
+      ? (cookiesFlag
+          ? '--extractor-args "youtube:player_client=web,web_creator"'
+          : '--extractor-args "youtube:player_client=android,ios"')
+      : '';
 
-    // Get audio URL + filename via Cobalt (bypasses YouTube bot detection)
-    const { directUrl, filename } = await cobaltGetUrl(videoUrl, 'audio');
-    if (!directUrl) throw new Error('Cobalt returned no audio URL');
-
-    let rawTitle = (filename || '').replace(/\.[^.]+$/, '').trim();
+    // Fetch title
+    let rawTitle = '';
+    try {
+      const { stdout: titleOut } = await execAsync(
+        `yt-dlp --print "%(title)s" --no-playlist ${jsRuntime} ${extractorArgs} ${cookiesFlag} "${videoUrl}"`,
+        { timeout: 30000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+      );
+      rawTitle = (titleOut || '').trim();
+    } catch(e) { /* title fetch failed silently */ }
 
     let cleanTitle = rawTitle
       .replace(/^([\d.,]+[KMBkm]?\s+\w+[\s\u00B7·•,]+)+/i, '')
       .replace(/\s*\|.*$/, '')
       .trim();
-
     if (/^[\d\s.,KMBkm\u00B7·•–-]+$/.test(cleanTitle)) cleanTitle = '';
-
     const safeTitle = (cleanTitle || `audio_${ts}`)
       .replace(/lofilulla/gi, artistName)
       .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
@@ -375,14 +383,42 @@ app.post('/video-to-mp3', async (req, res) => {
       .replace(new RegExp(`${artistName}-${artistName}`, 'gi'), artistName)
       || `audio_${ts}`;
 
-    console.log(`▶ [MP3] Downloading audio: ${rawTitle}`);
-    await downloadFile(directUrl, tmpAudio);
+    console.log(`▶ [MP3:${artistName}] Downloading audio via yt-dlp: ${rawTitle || videoUrl}`);
 
-    console.log(`▶ [MP3] Converting to MP3...`);
-    await execAsync(
-      `${ffmpegPath} -y -i "${tmpAudio}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
-      { timeout: 120000, maxBuffer: MAX_BUFFER }
-    );
+    const ytdlpAudioCmd = (extraArgs) =>
+      `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestaudio" -x --audio-format mp3 --audio-quality 192k ` +
+      `--no-playlist --concurrent-fragments 1 ${jsRuntime} ${extraArgs} ${cookiesFlag} -o "${tmpMp3}" "${videoUrl}"`;
+
+    let ytErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await execAsync(ytdlpAudioCmd(extractorArgs), { timeout: 180000, maxBuffer: MAX_BUFFER, env: ytDlpEnv });
+        ytErr = null; break;
+      } catch(e) {
+        ytErr = e;
+        if (attempt === 1 && (e.message || '').includes('429')) {
+          console.warn('⚠️ [MP3] 429 rate-limit — waiting 30s before retry...');
+          await new Promise(r => setTimeout(r, 30000));
+        } else break;
+      }
+    }
+    if (ytErr && isYouTube) {
+      console.warn('⚠️ [MP3] Primary failed — retrying with android,ios...');
+      try {
+        await execAsync(ytdlpAudioCmd('--extractor-args "youtube:player_client=android,ios"'), { timeout: 180000, maxBuffer: MAX_BUFFER, env: ytDlpEnv });
+        console.log('✅ [MP3] Fallback android/ios succeeded');
+        ytErr = null;
+      } catch(e2) {
+        ytErr = e2;
+        console.warn('⚠️ [MP3] android,ios failed — retrying with android_vr...');
+        try {
+          await execAsync(ytdlpAudioCmd('--extractor-args "youtube:player_client=android_vr"'), { timeout: 180000, maxBuffer: MAX_BUFFER, env: ytDlpEnv });
+          console.log('✅ [MP3] Fallback android_vr succeeded');
+          ytErr = null;
+        } catch(e3) { ytErr = e3; }
+      }
+    }
+    if (ytErr) throw ytErr;
 
     let durationSeconds = 0, endTime = '0:00';
     try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000, maxBuffer: MAX_BUFFER }); } catch(e) {
@@ -1157,7 +1193,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.18.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.19.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
