@@ -277,6 +277,71 @@ app.delete('/delete-video', async (req, res) => {
   }
 });
 
+// /cobalt-audio — n8n passes a direct audio URL (from Cobalt API called in n8n),
+// Railway just downloads it, converts to MP3, and uploads to R2.
+// Same as /video-to-mp3 but no server-side Cobalt call needed.
+app.post('/cobalt-audio', async (req, res) => {
+  const { audioUrl, folder, videoName, artist } = req.body;
+  if (!audioUrl) return res.status(400).json({ error: 'audioUrl required' });
+  const artistName = artist || (folder && folder.toLowerCase().includes('lufiaurora') ? 'LufiAurora' : 'NovaZiri');
+
+  const ts = Date.now();
+  const tmpAudio = `/tmp/cob_audio_${ts}`;
+  const tmpMp3   = `/tmp/audio_${ts}.mp3`;
+  const cleanup  = () => [tmpAudio, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  try {
+    let rawTitle = (videoName || '').replace(/\.[^.]+$/, '').trim();
+    let cleanTitle = rawTitle.replace(/^([\d.,]+[KMBkm]?\s+\w+[\s\u00B7·•,]+)+/i, '').replace(/\s*\|.*$/, '').trim();
+    if (/^[\d\s.,KMBkm\u00B7·•–-]+$/.test(cleanTitle)) cleanTitle = '';
+    const safeTitle = (cleanTitle || `audio_${ts}`)
+      .replace(/lofilulla/gi, artistName)
+      .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
+      .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
+      .replace(new RegExp(`${artistName}-${artistName}`, 'gi'), artistName)
+      || `audio_${ts}`;
+
+    console.log(`▶ [CobaltAudio:${artistName}] Downloading: ${rawTitle || audioUrl.slice(0, 80)}`);
+    await downloadFile(audioUrl, tmpAudio);
+
+    console.log(`▶ [CobaltAudio] Converting to MP3...`);
+    await execAsync(`${ffmpegPath} -y -i "${tmpAudio}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`, { timeout: 120000, maxBuffer: MAX_BUFFER });
+
+    let durationSeconds = 0, endTime = '0:00';
+    try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000, maxBuffer: MAX_BUFFER }); } catch(e) {
+      const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
+      if (m) durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
+    }
+
+    try {
+      let silenceOut = '';
+      try { const r = await execAsync(`${ffmpegPath} -i "${tmpMp3}" -af "silencedetect=noise=-35dB:d=0.3" -f null /dev/null`, { timeout: 30000, maxBuffer: MAX_BUFFER }); silenceOut = r.stderr || ''; } catch(e2) { silenceOut = e2.stderr || ''; }
+      const silenceStarts = [...silenceOut.matchAll(/silence_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
+      if (silenceStarts.length > 0) {
+        const last = silenceStarts[silenceStarts.length - 1];
+        if (durationSeconds - last > 0.3 && last > 1) { console.log(`▶ [CobaltAudio] Trimming trailing silence → ${last.toFixed(3)}s`); durationSeconds = parseFloat(last.toFixed(3)); }
+      }
+    } catch(e) {}
+
+    const tm = Math.floor(durationSeconds / 60), ts2 = Math.floor(durationSeconds % 60);
+    endTime = `${tm}:${ts2.toString().padStart(2, '0')}`;
+
+    const mp3Name = `${safeTitle}.mp3`;
+    const key = folder ? `${folder}/${mp3Name}` : `mp3/${mp3Name}`;
+    const buf = fs.readFileSync(tmpMp3);
+    await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key, Body: buf, ContentType: 'audio/mpeg' }));
+    const mp3Url = `${process.env.R2_PUBLIC_URL}/${key.split('/').map(encodeURIComponent).join('/')}`;
+
+    cleanup();
+    console.log(`✅ [CobaltAudio] Done → ${mp3Url} (${endTime})`);
+    res.json({ success: true, mp3Url, mp3Name, durationSeconds, endTime });
+  } catch(err) {
+    cleanup();
+    console.error('❌ cobalt-audio error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/video-to-mp3', async (req, res) => {
   const { videoUrl, folder, artist } = req.body;
   if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
@@ -1092,7 +1157,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.16.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.17.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
