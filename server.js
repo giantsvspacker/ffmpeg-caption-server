@@ -962,7 +962,103 @@ app.post('/upload-cookies', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.13.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+// ============================================================
+// /cobalt-scale  — download a direct URL (from Cobalt API) + smartScale 9:16 + upload R2
+// No yt-dlp needed — Cobalt already bypassed bot detection
+// ============================================================
+app.post('/cobalt-scale', async (req, res) => {
+  const { videoUrl, folder, videoName, smartScale, maxDuration } = req.body;
+  if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
+
+  const maxDurSec = maxDuration ? parseInt(maxDuration) : 0;
+  const ts   = Date.now();
+  const inp  = `/tmp/cob_in_${ts}.mp4`;
+  const trim = `/tmp/cob_trim_${ts}.mp4`;
+  const out  = `/tmp/cob_out_${ts}.mp4`;
+  const cleanup = () => [inp, trim, out].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+
+  try {
+    console.log(`▶ [Cobalt] Downloading: ${videoUrl.slice(0, 100)}`);
+    await downloadFile(videoUrl, inp);
+
+    let sourceForScale = inp;
+
+    // Trim if longer than maxDuration
+    if (maxDurSec > 0) {
+      let dur = 0;
+      try { await execAsync(`${ffmpegPath} -i "${inp}"`, { timeout: 15000, maxBuffer: MAX_BUFFER }); } catch(e) {
+        const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+        if (m) dur = +m[1]*3600 + +m[2]*60 + parseFloat(m[3]);
+      }
+      if (dur > maxDurSec) {
+        console.log(`▶ [Cobalt] Trimming ${dur.toFixed(1)}s → ${maxDurSec}s`);
+        await execAsync(`${ffmpegPath} -y -i "${inp}" -t ${maxDurSec} -c copy "${trim}"`, { timeout: 120000, maxBuffer: MAX_BUFFER });
+        sourceForScale = trim;
+      }
+    }
+
+    // Detect source dimensions
+    let srcW = 0, srcH = 0;
+    try { await execAsync(`${ffmpegPath} -i "${sourceForScale}"`, { timeout: 15000, maxBuffer: MAX_BUFFER }); } catch(e) {
+      const m = (e.stderr || '').match(/(\d{2,5})x(\d{2,5})/);
+      if (m) { srcW = parseInt(m[1]); srcH = parseInt(m[2]); }
+    }
+
+    // SmartScale: min 1080p portrait, keep higher native resolution
+    let encW = 1080, encH = 1920;
+    if (smartScale && srcW > 0 && srcH > 0) {
+      const isLandscape = srcW > srcH;
+      if (isLandscape) {
+        // Landscape → portrait: natural portrait height = srcH * 16/9
+        const naturalH = Math.round(srcH * 16 / 9);
+        if (naturalH < 1920) {
+          encW = 1080; encH = 1920;
+        } else {
+          encW = srcH % 2 === 0 ? srcH : srcH - 1;
+          encH = naturalH % 2 === 0 ? naturalH : naturalH - 1;
+        }
+      } else {
+        // Portrait or square source
+        if (srcH < 1920) { encW = 1080; encH = 1920; }
+        else { encW = srcW % 2 === 0 ? srcW : srcW - 1; encH = srcH % 2 === 0 ? srcH : srcH - 1; }
+      }
+    }
+    console.log(`🎯 [Cobalt] smartScale: ${srcW}x${srcH} → ${encW}x${encH}`);
+
+    // Only remux if already 9:16 and large enough
+    const ar = srcW > 0 && srcH > 0 ? srcW / srcH : 0;
+    const already916 = ar > 0 && Math.abs(ar - 9/16) < 0.02;
+    const largeEnough = srcW >= encW && srcH >= encH;
+
+    let cmd;
+    if (already916 && largeEnough) {
+      console.log(`▶ [Cobalt] Already 9:16 @ ${srcW}x${srcH} — remuxing`);
+      cmd = `${ffmpegPath} -y -i "${sourceForScale}" -c copy -movflags +faststart "${out}"`;
+    } else {
+      const vf = `scale=${encW}:${encH}:force_original_aspect_ratio=increase:flags=lanczos,crop=${encW}:${encH}`;
+      cmd = `${ffmpegPath} -y -i "${sourceForScale}" -vf "${vf}" -c:v libx264 -preset ultrafast -crf 23 -threads 1 -c:a aac -b:a 128k -movflags +faststart "${out}"`;
+      console.log(`▶ [Cobalt] Encoding to ${encW}x${encH}...`);
+    }
+
+    await execAsync(cmd, { timeout: 600000, maxBuffer: MAX_BUFFER });
+
+    const safeName = (videoName || `cobalt_${ts}.mp4`)
+      .replace(/[#%?&=+<>|\\/:*"]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim() || `cobalt_${ts}.mp4`;
+    const folderPath = (folder || 'cobalt-downloads').replace(/\/$/, '');
+    const key = `${folderPath}/${safeName}`;
+    const publicUrl = await uploadToR2(out, key);
+
+    cleanup();
+    console.log(`✅ [Cobalt] Done → ${publicUrl}`);
+    res.json({ success: true, output_url: publicUrl, key });
+  } catch(err) {
+    cleanup();
+    console.error('❌ cobalt-scale error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.14.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
