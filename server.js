@@ -126,7 +126,7 @@ function cobaltGetUrl(sourceUrl, mode = 'auto') {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ url: sourceUrl, videoQuality: 'max', downloadMode: mode, filenameStyle: 'pretty' });
     const req = https.request({
-      hostname: 'api.cobalt.tools',
+      hostname: 'downloadapi.stuff.solutions',
       path: '/',
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
@@ -1157,7 +1157,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.17.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.18.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
