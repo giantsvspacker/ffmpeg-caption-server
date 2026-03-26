@@ -606,7 +606,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         await execAsync(
-          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
           `--concurrent-fragments 1 ` +
           `${jsRuntime} ${extractorArgs} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
@@ -626,7 +626,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       console.warn('⚠️ [YT] Primary failed — retrying with android,ios clients...');
       try {
         await execAsync(
-          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+          `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
           `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
           `${jsRuntime} --extractor-args "youtube:player_client=android,ios" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
           { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
@@ -639,7 +639,7 @@ app.post('/download-youtube-to-r2', async (req, res) => {
         console.warn('⚠️ [YT] android/ios failed — retrying with android_vr client...');
         try {
           await execAsync(
-            `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
+            `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
             `--no-playlist --merge-output-format mp4 --sleep-interval 5 --max-sleep-interval 15 ` +
             `${jsRuntime} --extractor-args "youtube:player_client=android_vr" ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
