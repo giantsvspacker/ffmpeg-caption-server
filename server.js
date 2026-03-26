@@ -113,6 +113,7 @@ async function downloadFile(url, dest, hops = 0) {
         return downloadFile(res.headers.location, dest, hops+1).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+      res.on('error', err => { file.close(); try { fs.unlinkSync(dest); } catch(e) {} reject(err); });
       res.pipe(file);
       file.on('finish', () => { file.close(); resolve(); });
     }).on('error', err => { file.close(); try { fs.unlinkSync(dest); } catch(e) {} reject(err); });
@@ -131,6 +132,7 @@ function cobaltGetUrl(sourceUrl, mode = 'auto') {
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
     }, (res) => {
       let data = '';
+      res.on('error', reject);
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try {
@@ -1079,7 +1081,18 @@ app.post('/cobalt-scale', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.15.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
+// Quick diagnostic: GET /test-cobalt?url=... — calls cobaltGetUrl and returns raw result
+app.get('/test-cobalt', async (req, res) => {
+  const url = req.query.url || 'https://www.youtube.com/shorts/_fe8J2cwtKQ';
+  try {
+    const result = await cobaltGetUrl(url, 'audio');
+    res.json({ ok: true, ...result });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.16.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
