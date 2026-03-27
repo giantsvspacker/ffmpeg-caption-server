@@ -752,11 +752,12 @@ app.post('/download-youtube-to-r2', async (req, res) => {
       // Check if age-restricted — tv_embedded bypasses age gates without age-verified cookies
       const isAgeRestricted = /(sign in to confirm your age|age.restrict|inappropriate for some users|confirm your age)/i.test((ytErr.message || '') + (ytErr.stderr || ''));
       if (isAgeRestricted) {
-        console.warn('⚠️ [YT] Age-restricted video — retrying with tv_embedded client...');
+        // Try tv_embedded first (bypasses age gate without cookies)
+        console.warn('⚠️ [YT] Age-restricted — trying tv_embedded...');
         try {
           await execAsync(
             `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
-            `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+            `--no-playlist --merge-output-format mp4 --age-limit 99 ` +
             `${jsRuntime} --extractor-args "youtube:player_client=tv_embedded" ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
             { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
           );
@@ -764,7 +765,23 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           ytErr = null;
         } catch (eAge) {
           ytErr = eAge;
-          console.warn('⚠️ [YT] tv_embedded failed for age-restricted video');
+          // Try web client + cookies (most reliable for age-gated content if cookies are age-verified)
+          if (cookiesFlag) {
+            console.warn('⚠️ [YT] tv_embedded failed — trying web client + cookies for age-restricted...');
+            try {
+              await execAsync(
+                `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
+                `--no-playlist --merge-output-format mp4 --age-limit 99 ` +
+                `${jsRuntime} --extractor-args "youtube:player_client=web" ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+                { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+              );
+              console.log('✅ [YT] web + cookies (age bypass) succeeded');
+              ytErr = null;
+            } catch (eAge2) {
+              ytErr = eAge2;
+              console.warn('⚠️ [YT] web + cookies also failed for age-restricted video');
+            }
+          }
         }
       }
       if (ytErr) {
@@ -1215,7 +1232,7 @@ app.get('/test-cobalt', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.22.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext, proxy: !!process.env.YT_PROXY }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '3.23.0', maxBuffer: '200MB', cookiesReady, ffmpegHasDrawtext, proxy: !!process.env.YT_PROXY }));
 
 // Reload cookies from R2 on demand — call this after uploading new cookies.txt to R2
 app.get('/reload-cookies', async (req, res) => {
