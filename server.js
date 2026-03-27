@@ -749,6 +749,25 @@ app.post('/download-youtube-to-r2', async (req, res) => {
     }
 
     if (ytErr && isYouTube) {
+      // Check if age-restricted — tv_embedded bypasses age gates without age-verified cookies
+      const isAgeRestricted = /(sign in to confirm your age|age.restrict|inappropriate for some users|confirm your age)/i.test((ytErr.message || '') + (ytErr.stderr || ''));
+      if (isAgeRestricted) {
+        console.warn('⚠️ [YT] Age-restricted video — retrying with tv_embedded client...');
+        try {
+          await execAsync(
+            `yt-dlp --ffmpeg-location "${ffmpegPath}" -f "bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best" ` +
+            `--no-playlist --merge-output-format mp4 --sleep-interval 3 --max-sleep-interval 8 ` +
+            `${jsRuntime} --extractor-args "youtube:player_client=tv_embedded" ${proxyFlag} ${cookiesFlag} -o "${inp}" "${youtubeUrl}"`,
+            { timeout: 360000, maxBuffer: MAX_BUFFER, env: ytDlpEnv }
+          );
+          console.log('✅ [YT] tv_embedded (age bypass) succeeded');
+          ytErr = null;
+        } catch (eAge) {
+          ytErr = eAge;
+          console.warn('⚠️ [YT] tv_embedded failed for age-restricted video');
+        }
+      }
+      if (ytErr) {
       console.warn('⚠️ [YT] Primary failed — retrying with android,ios clients...');
       try {
         await execAsync(
@@ -856,7 +875,8 @@ app.post('/download-youtube-to-r2', async (req, res) => {
           }
         }
       }
-    }
+      } // closes if (ytErr)
+    } // closes if (ytErr && isYouTube)
 
     if (ytErr && !isYouTube && cookiesFlag) {
       const msg1 = (ytErr.message || '') + (ytErr.stderr || '');
