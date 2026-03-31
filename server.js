@@ -345,6 +345,10 @@ app.post('/cobalt-audio', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// /upload-audio-binary — n8n sends raw binary audio (from Google Drive download),
+// Railway re-encodes it via ffmpeg to proper MP3 format, then uploads to R2.
+// Fixes RunningHub error 805 (AudioSeparation tensor reshape failure).
 app.post('/upload-audio-binary', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
   const ts = Date.now();
   const originalName = req.headers['x-filename'] || `audio_${ts}.mp3`;
@@ -353,37 +357,26 @@ app.post('/upload-audio-binary', express.raw({ type: '*/*', limit: '50mb' }), as
     .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
     .replace(/\s+/g, '-').replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '') || `audio_${ts}`;
-
   const tmpInput = `/tmp/upload_${ts}.mp3`;
   const tmpMp3   = `/tmp/converted_${ts}.mp3`;
   const cleanup  = () => [tmpInput, tmpMp3].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
-
   try {
     fs.writeFileSync(tmpInput, req.body);
-    console.log(`▶ [UploadAudio] Converting: ${originalName}`);
-    await execAsync(
-      `${ffmpegPath} -y -i "${tmpInput}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`,
-      { timeout: 120000, maxBuffer: MAX_BUFFER }
-    );
+    await execAsync(`${ffmpegPath} -y -i "${tmpInput}" -vn -ar 44100 -ac 2 -b:a 192k "${tmpMp3}"`, { timeout: 120000, maxBuffer: MAX_BUFFER });
     let durationSeconds = 0;
-    try {
-      await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000, maxBuffer: MAX_BUFFER });
-    } catch(e) {
+    try { await execAsync(`${ffmpegPath} -i "${tmpMp3}"`, { timeout: 10000, maxBuffer: MAX_BUFFER }); } catch(e) {
       const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
       if (m) durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
     }
     const mp3Name = `${safeTitle}.mp3`;
     const key = `gdrive-audio/${mp3Name}`;
     const buf = fs.readFileSync(tmpMp3);
-    await s3.send(new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key, Body: buf, ContentType: 'audio/mpeg'
-    }));
+    await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key, Body: buf, ContentType: 'audio/mpeg' }));
     const mp3Url = `${process.env.R2_PUBLIC_URL}/${key.split('/').map(encodeURIComponent).join('/')}`;
     cleanup();
     const tm = Math.floor(durationSeconds/60), ts2 = Math.floor(durationSeconds%60);
-    console.log(`✅ [UploadAudio] Done → ${mp3Url}`);
-    res.json({ success: true, mp3Url, mp3Name, durationSeconds, endTime: `${tm}:${String(ts2).padStart(2,'0')}` });
+    console.log(`✅ [UploadAudioBinary] Done → ${mp3Url} (${durationSeconds}s)`);
+    res.json({ success: true, mp3Url, mp3Name, durationSeconds, endTime: `${tm}:${ts2.toString().padStart(2,'0')}` });
   } catch(err) {
     cleanup();
     console.error('❌ upload-audio-binary error:', err.message);
