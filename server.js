@@ -351,7 +351,8 @@ app.post('/cobalt-audio', async (req, res) => {
 // Fixes RunningHub error 805 (AudioSeparation tensor reshape failure).
 app.post('/upload-audio-binary', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
   const ts = Date.now();
-  const originalName = req.headers['x-filename'] || `audio_${ts}.mp3`;
+  const rawFilename = req.headers['x-filename'] || `audio_${ts}.mp3`;
+  const originalName = (() => { try { return decodeURIComponent(rawFilename); } catch(e) { return rawFilename; } })();
   const baseName = require('path').basename(originalName, require('path').extname(originalName));
   const safeTitle = baseName
     .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
