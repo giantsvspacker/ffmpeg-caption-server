@@ -385,6 +385,42 @@ app.post('/upload-audio-binary', express.raw({ type: '*/*', limit: '50mb' }), as
   }
 });
 
+// /probe-audio — same as /upload-audio-binary but skips re-encoding.
+// Use when the audio is already a valid MP3 (e.g. pre-converted GDrive file).
+// Just probes duration, uploads original to R2, returns same response shape.
+app.post('/probe-audio', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+  const ts = Date.now();
+  const rawFilename = req.headers['x-filename'] || `audio_${ts}.mp3`;
+  const originalName = (() => { try { return decodeURIComponent(rawFilename); } catch(e) { return rawFilename; } })();
+  const baseName = require('path').basename(originalName, require('path').extname(originalName));
+  const safeTitle = baseName
+    .replace(/[#%?&=+<>|\\/:*"\u00B7·]/g, '')
+    .replace(/\s+/g, '-').replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '') || `audio_${ts}`;
+  const tmpInput = `/tmp/probe_${ts}.mp3`;
+  const cleanup  = () => { try { fs.unlinkSync(tmpInput); } catch(e) {} };
+  try {
+    fs.writeFileSync(tmpInput, req.body);
+    let durationSeconds = 0;
+    try { await execAsync(`${ffmpegPath} -i "${tmpInput}"`, { timeout: 10000, maxBuffer: MAX_BUFFER }); } catch(e) {
+      const m = (e.stderr || '').match(/Duration:\s*(\d+):(\d+):(\d+)/);
+      if (m) durationSeconds = +m[1]*3600 + +m[2]*60 + +m[3];
+    }
+    const mp3Name = `${safeTitle}.mp3`;
+    const key = `gdrive-audio/${mp3Name}`;
+    await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key, Body: req.body, ContentType: 'audio/mpeg' }));
+    const mp3Url = `${process.env.R2_PUBLIC_URL}/${key.split('/').map(encodeURIComponent).join('/')}`;
+    cleanup();
+    const tm = Math.floor(durationSeconds/60), ts2 = Math.floor(durationSeconds%60);
+    console.log(`✅ [ProbeAudio] Done → ${mp3Url} (${durationSeconds}s)`);
+    res.json({ success: true, mp3Url, mp3Name, durationSeconds, endTime: `${tm}:${ts2.toString().padStart(2,'0')}` });
+  } catch(err) {
+    cleanup();
+    console.error('❌ probe-audio error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/video-to-mp3', async (req, res) => {
   const { videoUrl, folder, artist } = req.body;
   if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
