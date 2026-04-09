@@ -114,7 +114,9 @@ async function downloadFile(url, dest, hops = 0) {
     proto.get(url, res => {
       if ([301,302,303,307,308].includes(res.statusCode)) {
         file.close(); try { fs.unlinkSync(dest); } catch(e) {}
-        return downloadFile(res.headers.location, dest, hops+1).then(resolve).catch(reject);
+        let loc = res.headers.location;
+if (loc && !loc.startsWith('http')) loc = new URL(loc, url).href;
+return downloadFile(loc, dest, hops+1).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
       res.on('error', err => { file.close(); try { fs.unlinkSync(dest); } catch(e) {} reject(err); });
